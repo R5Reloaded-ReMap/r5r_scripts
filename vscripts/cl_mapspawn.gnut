@@ -108,7 +108,7 @@ UISize function GetScaledVirtualScreenSize( UISize virtualScreenSize, UISize scr
 
 
 void function ClientCodeCallback_MapSpawn()
-{
+{	
 	LevelVarInit()
 	DynamicLight_Init()
 
@@ -140,7 +140,7 @@ void function ClientCodeCallback_MapSpawn()
 	#endif
 
 	CreateHUDRuiTopologies()
-
+	PlaylistPakLoadInit() //(mk): Currently will not work for paks that are needed to register loot data due to async nature. Needs engine solution
 	SV_CL_Shared_Init()
 }
 
@@ -284,7 +284,6 @@ void function ClientCodeCallback_FullUpdate()
 {
 	foreach ( callbackFunc in clGlobal.fullUpdateCallbacks )
 		callbackFunc()
-	//ScreenCoverTransition( 4.5 )
 }
 
 
@@ -331,7 +330,7 @@ void function RunClientConnectScriptsThreaded( entity player )
 	if( GetCurrentPlaylistVarBool( "lsm_mod15", false ) )
 		thread Thread_StartFakeObituaries()
 	
-	DM_HintCatalog( 3, 0 )
+	DM_HintCatalog( 3, null )
 }
 
 

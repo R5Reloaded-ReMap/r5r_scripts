@@ -8,9 +8,10 @@ global function OpenSystemMenu
 global function UI_Callback_MOTD
 global function SetMotdText
 global function OpenMOTD
-
+global function OpenChampionCard
 
 global function ShouldDisplayOptInOptions
+global function OpenWeaponSelector
 
 struct ButtonData
 {
@@ -55,7 +56,12 @@ struct
 	table<var, ButtonData > OpenRecordingsMenu
 	table<var, ButtonData > OpenMOTD
 	table<var, ButtonData > OpenScenariosStandings
-
+	table<var, ButtonData > OpenChampionCard
+	table<var, ButtonData > CoachingStartAgain
+	table<var, ButtonData > CoachingStop
+	table<var, ButtonData > LegendSelect
+	table<var, ButtonData > RealisticModeSpectate
+	
 	InputDef& qaFooter
 	
 	bool SETHUNTERALLOWED
@@ -82,6 +88,13 @@ void function InitSystemMenu( var newMenuArg ) //
 			file.motdText = ""
 		}
 	)
+	
+	AddUICallback_LevelShutdown( SetShutdownTime )
+}
+
+void function SetShutdownTime()
+{
+	uiGlobal.fShutdownTime = Time()
 }
 
 void function InitSystemPanelMain( var panel )
@@ -95,15 +108,17 @@ void function InitSystemPanelMain( var panel )
 		file.qaFooter = AddPanelFooterOption( panel, LEFT, BUTTON_X, true, "#X_BUTTON_QA", "QA", ToggleOptIn, ShouldDisplayOptInOptions )
 
 	#if CONSOLE_PROG
-		AddPanelFooterOption( panel, RIGHT, BUTTON_BACK, false, "#BUTTON_RETURN_TO_MAIN", "", ReturnToMain_OnActivate )
+		AddPanelFooterOption( panel, RIGHT, BUTTON_STICK_RIGHT, true, "#BUTTON_VIEW_CINEMATIC", "", ViewCinematic, IsLobby )
+		AddPanelFooterOption( panel, RIGHT, BUTTON_BACK, true, "#BUTTON_RETURN_TO_MAIN", "", ReturnToMain_OnActivate, IsLobby )
 	#endif
-	AddPanelFooterOption( panel, RIGHT, BUTTON_STICK_RIGHT, true, "#BUTTON_VIEW_CINEMATIC", "#VIEW_CINEMATIC", ViewCinematic, IsLobby )
+	AddPanelFooterOption( panel, RIGHT, KEY_V, true, "", "#VIEW_CINEMATIC", ViewCinematic, IsLobby )
+	AddPanelFooterOption( panel, RIGHT, KEY_R, true, "", "#BUTTON_RETURN_TO_MAIN", ReturnToMain_OnActivate, IsLobby )
 }
 
 void function ViewCinematic( var button )
 {
 	CloseActiveMenu()
-	thread PlayVideoMenu( false, "intro", "Apex_Opening_Movie", eVideoSkipRule.INSTANT )
+	thread PlayVideoMenu( false, "intro", "", eVideoSkipRule.INSTANT )
 }
 
 void function TryChangeCharacters()
@@ -193,7 +208,12 @@ void function InitSystemPanel( var panel )
 	file.OpenRecordingsMenu[ panel ] <- clone data
 	file.OpenMOTD[ panel ] <- clone data
 	file.OpenScenariosStandings[ panel ] <- clone data
-
+	file.OpenChampionCard[ panel ] <- clone data
+	file.CoachingStartAgain[ panel ] <- clone data
+	file.CoachingStop[ panel ] <- clone data
+	file.LegendSelect[ panel ] <- clone data
+	file.RealisticModeSpectate[ panel ] <- clone data
+	
 	file.ExitChallengeButtonData[ panel ].label = "#FS_FINISH_CHALLENGE"
 	file.ExitChallengeButtonData[ panel ].activateFunc = SignalExitChallenge
 
@@ -227,7 +247,7 @@ void function InitSystemPanel( var panel )
 	file.friendlyFireButtonData[ panel ].label = "#BUTTON_FRIENDLY_FIRE_TOGGLE"
 	file.friendlyFireButtonData[ panel ].activateFunc = ToggleFriendlyFire
 	
-	file.thirdPersonButtonData[ panel ].label = "#FS_TOGGLE_THIRD_PERSON"
+	file.thirdPersonButtonData[ panel ].label = "Toggle Third Person"
 	file.thirdPersonButtonData[ panel ].activateFunc = ToggleThirdPerson
 
 	file.endmatchButtonData[ panel ].label = "#FS_END_GAME_LOBBY"
@@ -272,7 +292,7 @@ void function InitSystemPanel( var panel )
 	file.OpenWeaponsMenu[ panel ].label = "#FS_WEAPONS_MENU"
 	file.OpenWeaponsMenu[ panel ].activateFunc = OpenWeaponSelector
 
-	file.OpenRecordingsMenu[ panel ].label = "1v1 RECORDINGS MENU"
+	file.OpenRecordingsMenu[ panel ].label = "RECORDINGS LIST"
 	file.OpenRecordingsMenu[ panel ].activateFunc = OpenRecordingsMenu
 	
 	file.OpenMOTD[ panel ].label = "#FS_SERVER_MOTD"
@@ -280,6 +300,21 @@ void function InitSystemPanel( var panel )
 	
 	file.OpenScenariosStandings[ panel ].label = "#FS_SCENARIOS_STANDINGS"
 	file.OpenScenariosStandings[ panel ].activateFunc = UI_OpenScenariosStandingsMenu	
+	
+	file.OpenChampionCard[ panel ].label = "#FS_OPEN_CHAMPION"
+	file.OpenChampionCard[ panel ].activateFunc = OpenChampionCard	
+
+	file.CoachingStartAgain[ panel ].label = "REPEAT RECORDING"
+	file.CoachingStartAgain[ panel ].activateFunc = OpenCoachingStartAgain	
+
+	file.CoachingStop[ panel ].label = "STOP RECORDING"
+	file.CoachingStop[ panel ].activateFunc = OpenCoachingStop
+	
+	file.LegendSelect[ panel ].label = "#SELECT_LEGEND"
+	file.LegendSelect[ panel ].activateFunc = OpenSelectLegend
+	
+	file.RealisticModeSpectate[ panel ].label = "#DEATH_SCREEN_SPECTATE"
+	file.RealisticModeSpectate[ panel ].activateFunc = RealisticModeSpectate
 	
 	AddPanelEventHandler( panel, eUIEvent.PANEL_SHOW, SystemPanelShow )
 }
@@ -314,23 +349,31 @@ void function UpdateSystemPanel( var panel )
 	int buttonIndex = 0
 	if ( IsConnected() && !IsLobby() )
 	{
-		RunClientScript( "FS_RegisterAdmin" )
-		
 		UISize screenSize = GetScreenSize()
 		SetCursorPosition( <1920.0 * 0.5, 1080.0 * 0.5, 0> )
 
 		SetButtonData( panel, buttonIndex++, file.settingsButtonData[ panel ] )
 		
-		if( Playlist() == ePlaylists.fs_dm || Playlist() == ePlaylists.fs_realistic_ttv )
+		if( Playlist() == ePlaylists.fs_dm && Playlist() != ePlaylists.fs_realistic_ttv )
 			SetButtonData( panel, buttonIndex++, file.ToggleScoreboardFocus[ panel ] )
+		
+		if( Playlist() == ePlaylists.fs_realistic_ttv && GetCurrentPlaylistVarBool( "realistic_enable_spectate", true ) )
+			SetButtonData( panel, buttonIndex++, file.RealisticModeSpectate[ panel ] )
 
 		if( uiGlobal.is1v1GameType && Playlist() != ePlaylists.fs_1v1_coaching ) //initialized after level load
 		{
-			SetButtonData( panel, buttonIndex++, file.Toggle1v1ScoreboardFocus[ panel ] )
+			// SetButtonData( panel, buttonIndex++, file.Toggle1v1ScoreboardFocus[ panel ] )
 			SetButtonData( panel, buttonIndex++, file.ToggleRest[ panel ] )
 			SetButtonData( panel, buttonIndex++, file.OpenWeaponsMenu[ panel ] )
-		} else if( Playlist() == ePlaylists.fs_1v1_coaching )
+		} 
+		else if( Playlist() == ePlaylists.fs_1v1_coaching )
 		{
+			if( GetGlobalNetBool( "FS_Coaching_IsPlayingRecording" ) && uiGlobal.bIsServerAdmin )
+			{
+				SetButtonData( panel, buttonIndex++, file.CoachingStartAgain[ panel ] )
+				SetButtonData( panel, buttonIndex++, file.CoachingStop[ panel ] )
+			}
+			
 			SetButtonData( panel, buttonIndex++, file.OpenRecordingsMenu[ panel ] )
 			SetButtonData( panel, buttonIndex++, file.OpenWeaponsMenu[ panel ] )
 		}
@@ -342,6 +385,12 @@ void function UpdateSystemPanel( var panel )
 		{
 			SetButtonData( panel, buttonIndex++, file.ToggleRest[ panel ] )
 		}
+		
+		if( IsValidModeForLegendSelectButton() )
+			SetButtonData( panel, buttonIndex++, file.LegendSelect[ panel ] )
+		
+		if( Flowstate_IsTrackerSupportedMode() && UIVarExists( "tracker_enabled" ) && GetUIVar( null, "tracker_enabled" ) )
+			SetButtonData( panel, buttonIndex++, file.OpenChampionCard[ panel ] )
 
 		if( Playlist() == ePlaylists.fs_lgduels_1v1 || Playlist() == ePlaylists.fs_dm_fast_instagib )		
 			SetButtonData( panel, buttonIndex++, file.OpenLGDuelsSettingsData[ panel ] )
@@ -349,7 +398,7 @@ void function UpdateSystemPanel( var panel )
 		if ( IsFiringRangeGameMode() && !uiGlobal.isAimTrainer )
 		{
 			SetButtonData( panel, buttonIndex++, file.changeCharacterButtonData[ panel ] ) // !FIXME
-			//SetButtonData( panel, buttonIndex++, file.thirdPersonButtonData[ panel ] )
+			SetButtonData( panel, buttonIndex++, file.thirdPersonButtonData[ panel ] )
 		
 			if ( (GetTeamSize( GetTeam() ) > 1) && FiringRangeHasFriendlyFire() )
 				SetButtonData( panel, buttonIndex++, file.friendlyFireButtonData[ panel ] )
@@ -468,7 +517,7 @@ void function UpdateSystemPanel( var panel )
 			msgonbottom = "FS DM - Ping: " + MyPing() + " ms."
 			break
 			
-			case ePlaylists.fs_dm:
+			case ePlaylists.fs_realistic_ttv:
 			msgonbottom = "Realistic TTV - Ping: " + MyPing() + " ms."
 			break
 			
@@ -519,10 +568,12 @@ void function SetButtonData( var panel, int buttonIndex, ButtonData buttonData )
 
 void function OnSystemMenu_Close()
 {
-	if( ISAIMTRAINER && IsConnected() && Playlist() == ePlaylists.fs_aimtrainer ){
-		CloseAllMenus()
-		RunClientScript("ServerCallback_OpenFRChallengesMainMenu", PlayerKillsForChallengesUI)
-	}
+	// if( ISAIMTRAINER && IsConnected() && Playlist() == ePlaylists.fs_aimtrainer )
+	// {
+		// printt( "uiGlobal.bIsLeavingMatch is:", uiGlobal.bIsLeavingMatch )
+		// CloseAllMenus()
+		// RunClientScript( "ServerCallback_OpenFRChallengesMainMenu", PlayerKillsForChallengesUI )
+	// }
 }
 
 
@@ -530,10 +581,12 @@ void function OnSystemMenu_NavigateBack()
 {
 	Assert( GetActiveMenu() == file.menu )
 	CloseActiveMenu()
-	if( ISAIMTRAINER && IsConnected() && Playlist() == ePlaylists.fs_aimtrainer ){
-		CloseAllMenus()
-		RunClientScript("ServerCallback_OpenFRChallengesMainMenu", PlayerKillsForChallengesUI)
-	}
+	
+	// if( ISAIMTRAINER && IsConnected() && Playlist() == ePlaylists.fs_aimtrainer )
+	// {
+		// CloseAllMenus()
+		// RunClientScript("ServerCallback_OpenFRChallengesMainMenu", PlayerKillsForChallengesUI )
+	// }
 }
 
 
@@ -562,13 +615,18 @@ void function OpenSettingsMenu()
 void function HostEndMatch()
 {
 	#if LISTEN_SERVER
-	CreateServer( GetPlayerName() + " Lobby", "", "mp_lobby", "menufall", eServerVisibility.OFFLINE )
+		CreateServer( GetPlayerName() + " Lobby", "", "mp_lobby", "dev_default", eServerVisibility.OFFLINE )
 	#endif // LISTEN_SERVER
 }
 
 void function RunSpectateCommand()
 {
 	ClientCommand( "spectate" )
+}
+
+void function RealisticModeSpectate()
+{
+	ClientCommand( "realistic_mode_spectate" )
 }
 
 void function ShowScoreboard_System()
@@ -626,7 +684,29 @@ void function AdminDestroyDummys_MovementRecorder()
 	ClientCommand( "DestroyDummys Admin" )
 }
 
-#if CONSOLE_PROG
+void function OpenCoachingStartAgain()
+{
+	ClientCommand( "coaching_startagain" )
+}
+
+void function OpenCoachingStop()
+{
+	ClientCommand( "coaching_stop" )
+}
+	
+void function OpenChampionCard()
+{
+	RunClientScript( "SelfShowChampion" )
+}
+
+void function OpenSelectLegend()
+{
+	if( IsDevGamemode() )
+		RunClientScript( "OpenCharacterSelectNewMenu", true )
+	else
+		RunClientScript( "OpenCharacterSelectAimTrainer", true )
+}
+
 void function ReturnToMain_OnActivate( var button )
 {
 	ConfirmDialogData data
@@ -644,8 +724,6 @@ void function OnReturnToMainMenu( int result )
 	if ( result == eDialogResult.YES )
 		ClientCommand( "disconnect" )
 }
-#endif
-
 
 void function ToggleOptIn( var button )
 {
@@ -667,37 +745,33 @@ bool function ShouldDisplayOptInOptions()
 	return GetGlobalNetBool( "isOptInServer" )
 }
 
-void function UI_Callback_MOTD()
+void function UI_Callback_MOTD( bool force )
 {
-	SetMotdText( "" )
+	SetMotdText( "", force )
 }
 
-void function SetMotdText( string text )
+void function SetMotdText( string text, bool force )
 {
-	file.motdText = text
+	file.motdText = text + file.motdText
 	
-	// auto-opening motd disabled as per amos request
-
-	if( !GetConVarInt( "show_motd_on_server_first_join" ) )
+	if( !GetConVarBool( "enable_motd" ) )
 		return
 
-	// note(amos): GetServerID() cannot be used on the client
-	// it is a server only function that was accidentally
-	// registered for client too. Calling this here returns
-	// the server ID of your own listen server, so it will
-	// only show the message once during the duration of the
-	// process. in the future we need to work on the ability
-	// to send the server id to the client. commented, and
-	// directly calling OpenMOTD() for now.
-	OpenMOTD()
-
-	// string server = GetServerID()
+	if ( GetConVarBool( "open_motd_once_per_server" ) && !force )
+	{
+		string server = GetServerID()
 	
-	// if( !( server in file.seenMotdForServer ) )
-	// {
-	// 	OpenMOTD()
-	// 	file.seenMotdForServer[ server ] <- true
-	// }
+		if( !( server in file.seenMotdForServer ) )
+		{
+			OpenMOTD()
+			file.seenMotdForServer[ server ] <- true
+		}
+	}
+	else
+	{
+		//(mk): Just open it always.
+		OpenMOTD()
+	}
 }
 
 void function OpenMOTD()
@@ -712,19 +786,17 @@ void function OpenMOTD()
 	}
 	
 	string motd = ""
-	string motdLocalized = Localize( "#FS_PLAYLIST_MOTD" )
-	string motdLocaliziedContinue = Localize( "#FS_PLAYLIST_MOTD_CONTINUE" )
+	string motdLocalized = Localize( "#MOTD_TEXT" )
 	
-	if( motdLocalized != "" && motdLocalized != "#FS_PLAYLIST_MOTD" )
+	if( motdLocalized != "" && motdLocalized != "#MOTD_TEXT" )
 	{
 		motd = motdLocalized
+		string motdLocaliziedExtended = Localize( "#MOTD_TEXT_EXTENDED" )
 		
-		if( motdLocaliziedContinue != "" && motdLocaliziedContinue != "#FS_PLAYLIST_MOTD_CONTINUE" )
-		{
-			motd = motd + motdLocaliziedContinue	
-		}
+		if( motdLocaliziedExtended != "" && motdLocaliziedExtended != "#MOTD_TEXT" )
+			motd = motd + motdLocaliziedExtended	
 		
-		file.motdText = motd //save for repeat opens
+		file.motdText = motd //(mk): save for repeat opens
 	}
 	
 	OpenServerMOTD( motd )
@@ -748,11 +820,28 @@ void function UpdateOptInFooter()
 
 bool function ShouldShowDevMenu()
 {
-	if(IsLobby())
+	if( IsLobby() )
 		return false
 	
 	return true
 }
 
-
-
+bool function IsValidModeForLegendSelectButton()
+{
+	if( uiGlobal.is1v1GameType && Playlist() != ePlaylists.fs_1v1_coaching )
+		return true 
+		
+	int currentPlayListEnumId = Playlist()
+	switch( currentPlayListEnumId )
+	{
+		case ePlaylists.fs_realistic_ttv:
+		//
+		
+		return true
+	}
+	
+	if( IsDevGamemode() )
+		return true 
+		
+	return false
+}

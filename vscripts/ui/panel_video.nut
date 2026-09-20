@@ -12,6 +12,7 @@ struct
 {
 	var					panel
 	var					videoPanel
+	var 				LODButton
 	table<var, string>	buttonTitles
 	table<var, string>	buttonDescriptions
 	var					detailsPanel
@@ -19,15 +20,16 @@ struct
 	array<ConVarData>	conVarDataList
 
 	array<var>			noApplyConfirmationRequired
+	string 				r_lod_switch_scale
 	
 } file
 
 void function InitVideoPanelForCode( var panel )
 {
 	#if PC_PROG
-		asset resFile = $"resource/ui/menus/panels/video.res"
+		asset resFile = $"scripts/resource/ui/menus/panels/video.res"
 	#elseif CONSOLE_PROG
-		asset resFile = $"resource/ui/menus/panels/video_console.res"
+		asset resFile = $"scripts/resource/ui/menus/panels/video_console.res"
 	#endif
 	file.videoPanel = CreateVideoOptionsPanel( panel, "ContentPanel", resFile )
 	Hud_SetPos( file.videoPanel, 0, 0 )
@@ -69,11 +71,11 @@ void function InitVideoPanel( var panel )
 
 		button = Hud_GetChild( file.videoPanel, "SldFpsMax" )
 		SetupSettingsSlider( button, "#FS_FPS_MAX", "#FS_MAX_FPS_DESC", $"rui/menu/settings/settings_video" )
-		//AddButtonEventHandler( button, UIE_CHANGE, FpsMax_Changed )
+		AddButtonEventHandler( button, UIE_CHANGE, FpsMax_Changed )
 		file.noApplyConfirmationRequired.append( button )
 		
 		button = Hud_GetChild( file.videoPanel, "TextEntrySldFpsMax" )
-		//AddButtonEventHandler( button, UIE_CHANGE, FpsMax_Changed )
+		AddButtonEventHandler( button, UIE_CHANGE, FpsMax_Changed )
 		file.noApplyConfirmationRequired.append( button )
 
 		button = Hud_GetChild( file.videoPanel, "SldAdaptiveRes" )
@@ -84,6 +86,10 @@ void function InitVideoPanel( var panel )
 		SetupSettingsButton( Hud_GetChild( file.videoPanel, "SwchTextureDetail" ), "#TEXTURE_QUALITY", "#ADVANCED_VIDEO_MENU_TEXTURE_DETAIL_DESC", $"rui/menu/settings/settings_video" )
 		AddButtonEventHandler( Hud_GetChild( file.videoPanel, "SwchTextureDetail" ), UIE_CHANGE, TextureStreamBudget_Changed )
 
+		file.LODButton = Hud_GetChild( file.videoPanel, "SwchLODQuality" )//VideoOptions_Apply native function does not include lod, FIX ME FIX ME FIX ME!
+		SetupSettingsButton( file.LODButton, "#LOD_QUALITY", "#ADVANCED_VIDEO_MENU_LOD_QUALITY_DESC", $"rui/menu/settings/settings_video" )
+		AddButtonEventHandler( file.LODButton, UIE_CHANGE, LODQuality_Changed )
+
 		SetupSettingsButton( Hud_GetChild( file.videoPanel, "SwchAdaptiveSupersample" ), "#ADAPTIVE_SUPERSAMPLE", "#ADAPTIVE_SUPERSAMPLE_DESC", $"rui/menu/settings/settings_video" )
 
 		SetupSettingsButton( Hud_GetChild( file.videoPanel, "SwchVolumetricLighting" ), "#VOLUMETRIC_LIGHTING", "#VOLUMETRIC_LIGHTING_DESC", $"rui/menu/settings/settings_video" )
@@ -92,7 +98,7 @@ void function InitVideoPanel( var panel )
 		SetupSettingsSlider( button, "#FOV", "#ADVANCED_VIDEO_MENU_FOV_DESC", $"rui/menu/settings/settings_video" )
 		AddButtonEventHandler( button, UIE_CHANGE, FOV_Changed )
 		AddButtonEventHandler( Hud_GetChild( file.videoPanel, "TextEntrySldFOV" ), UIE_CHANGE, FOVTextEntry_Changed )
-		file.noApplyConfirmationRequired.append( button )
+		//file.noApplyConfirmationRequired.append( button )
 
 		SetupSettingsButton( Hud_GetChild( file.videoPanel, "SwchResolution" ), "#RESOLUTION", "#ADVANCED_VIDEO_MENU_RESOLUTION_DESC", $"rui/menu/settings/settings_video" )
 		AddButtonEventHandler( Hud_GetChild( file.videoPanel, "SwchResolution" ), UIE_CHANGE, ResolutionSelection_Changed )
@@ -222,6 +228,9 @@ void function AdvancedVideoButton_Changed( var button )
 {
 	// handle "colorblind_mode" being changed from accessibilty section of gameplay tab
 	if ( !IsTabPanelActive( file.panel ) )
+		return
+
+	if( file.noApplyConfirmationRequired.contains( button ) )
 		return
 
 	uiGlobal.videoSettingsChanged = true
@@ -420,8 +429,20 @@ void function TextureStreamBudget_Changed( var button )
 	VideoOptions_TextureStreamBudgetChanged( file.videoPanel )
 }
 
+void function LODQuality_Changed( var button )
+{
+	//VideoOptions_TextureStreamBudgetChanged( file.videoPanel )
+}
+
 void function FooterButton_Focused( var button )
 {
 	//var label = Hud_GetChild( file.panel, "LblMenuItemDescription" )
 	//Hud_SetText( label, "" )
+}
+
+void function FpsMax_Changed( var button )
+{
+	int fpsMax = GetConVarInt( "fps_max" )
+	if( fpsMax > 0 && fpsMax < 30 )
+		SetConVarInt( "fps_max", 30 )	
 }

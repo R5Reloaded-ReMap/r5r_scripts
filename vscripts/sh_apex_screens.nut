@@ -34,8 +34,6 @@ global function ClApexScreens_AddScreenOverride
 global function DEV_CreatePerfectApexScreen
 global function DEV_ToggleActiveApexScreenDebug
 global function DEV_ToggleFloatyBitsPrototype
-global int countCreation = 0
-global int countDestruction = 0
 #endif
 
 #if CLIENT
@@ -137,7 +135,7 @@ global struct ScreenOverrideInfo
 }
 table<string, ScreenOverrideInfo> s_screenOverrides
 
-struct ApexScreenState
+global struct ApexScreenState
 {
 	var    rui
 	int    magicId
@@ -224,6 +222,11 @@ struct {
 } file
 
 
+#if DEVELOPER 
+	int s_countCreation = 0
+	int s_countDestruction = 0
+#endif
+
 #if SERVER || CLIENT
 const string NV_ApexScreensEventTimeA = "NV_ApexScreensEventTimeA"
 const string NV_ApexScreensEventTimeB = "NV_ApexScreensEventTimeB"
@@ -238,15 +241,15 @@ void function ShApexScreens_Init()
 	if ( !GetCurrentPlaylistVarBool( "enable_apex_screens", true ) )
 		return
 
-	//Remote_RegisterClientFunction( "ServerToClient_ApexScreenKillDataChanged", "int", 0, 512, "float", 0.0, 10000.0, 32, "int", 0, 32, "entity" )
-	Remote_RegisterClientFunction( "ServerToClient_ApexScreenRefreshAll" )
+	//ScriptRemote_RegisterClientFunction( "ServerToClient_ApexScreenKillDataChanged", "int", 0, 512, "float", 0.0, 10000.0, 32, "int", 0, 32, "entity" )
+	ScriptRemote_RegisterClientFunction( "ServerToClient_ApexScreenRefreshAll" )
 
 	for ( int screenPosition = eApexScreenPosition.L; screenPosition <= eApexScreenPosition.R; screenPosition++ )
 	{
-		RegisterNetworkedVariable( format( "ApexScreensMasterState_Pos%d_CommenceTime", screenPosition ), SNDC_GLOBAL, SNVT_TIME, -1 )
-		RegisterNetworkedVariable( format( "ApexScreensMasterState_Pos%d_ModeIndex", screenPosition ), SNDC_GLOBAL, SNVT_INT, -1 )
-		RegisterNetworkedVariable( format( "ApexScreensMasterState_Pos%d_TransitionStyle", screenPosition ), SNDC_GLOBAL, SNVT_INT, -1 )
-		RegisterNetworkedVariable( format( "ApexScreensMasterState_Pos%d_Player", screenPosition ), SNDC_GLOBAL, SNVT_BIG_INT, -1 )
+		ScriptRegisterNetworkedVariable( format( "ApexScreensMasterState_Pos%d_CommenceTime", screenPosition ), SNDC_GLOBAL, SNVT_TIME, -1 )
+		ScriptRegisterNetworkedVariable( format( "ApexScreensMasterState_Pos%d_ModeIndex", screenPosition ), SNDC_GLOBAL, SNVT_INT, -1 )
+		ScriptRegisterNetworkedVariable( format( "ApexScreensMasterState_Pos%d_TransitionStyle", screenPosition ), SNDC_GLOBAL, SNVT_INT, -1 )
+		ScriptRegisterNetworkedVariable( format( "ApexScreensMasterState_Pos%d_Player", screenPosition ), SNDC_GLOBAL, SNVT_BIG_INT, -1 )
 
 		#if CLIENT
 			RegisterNetworkedVariableChangeCallback_time( format( "ApexScreensMasterState_Pos%d_CommenceTime", screenPosition ), void function( entity unused, float old, float new, bool ac ) : (screenPosition) {
@@ -267,7 +270,7 @@ void function ShApexScreens_Init()
 			} )
 		#endif
 	}
-	RegisterNetworkedVariable( NV_ApexScreensEventTimeA, SNDC_GLOBAL, SNVT_TIME, -1 )
+	ScriptRegisterNetworkedVariable( NV_ApexScreensEventTimeA, SNDC_GLOBAL, SNVT_TIME, -1 )
 	#if CLIENT
 		RegisterNetworkedVariableChangeCallback_time( NV_ApexScreensEventTimeA, void function( entity unused, float oldTime, float newTime, bool actuallyChanged )
 		{
@@ -276,7 +279,7 @@ void function ShApexScreens_Init()
 			OnUpdateApexScreensEventTime( newTime )
 		} )
 	#endif //
-	RegisterNetworkedVariable( NV_ApexScreensEventTimeB, SNDC_GLOBAL, SNVT_TIME, -1 )
+	ScriptRegisterNetworkedVariable( NV_ApexScreensEventTimeB, SNDC_GLOBAL, SNVT_TIME, -1 )
 	#if SERVER
 		RegisterSignal( "ApexScreenMasterThink" )
 
@@ -342,7 +345,7 @@ void function SetupScreenOverrides()
 {
 	for ( int overrideIdx = 0; overrideIdx < 5; ++overrideIdx )
 	{
-		//
+		// "apexscreen_tv_override_0"
 		string keyName = format( "apexscreen_tv_override_%d", overrideIdx )
 		if ( !GetCurrentPlaylistVarBool( keyName, false ) )
 			continue
@@ -714,11 +717,15 @@ void function DEV_ApexScreens_SetMode( var opt = "random" )
 		nextMode = int(opt)
 
 	array<entity> testArray = GetPlayerArray()
+	entity firstPlayer = null
+	if ( testArray.len() > 0 )
+		firstPlayer = testArray[0]
+
 	testArray.append( null )
 
 	HaltApexScreenMasterThink()
 	ShowModeInternal( eApexScreenPosition.L, eApexScreenTransitionStyle.SLIDE, nextMode, EHIToEncodedEHandle( testArray[RandomIntRange( 0, testArray.len() )] ) )
-	ShowModeInternal( eApexScreenPosition.C, eApexScreenTransitionStyle.NONE, nextMode, EHIToEncodedEHandle( gp()[0] ) )
+	ShowModeInternal( eApexScreenPosition.C, eApexScreenTransitionStyle.NONE, nextMode, EHIToEncodedEHandle( firstPlayer ) )
 	ShowModeInternal( eApexScreenPosition.R, eApexScreenTransitionStyle.SLIDE, nextMode, EHIToEncodedEHandle( testArray[RandomIntRange( 0, testArray.len() )] ) )
 
 	printt( "Apex Screen Mode: " + GetEnumString( "eApexScreenMode", nextMode ) )
@@ -989,10 +996,6 @@ bool function ClApexScreens_PosInStaticBanner( vector pos )
 
 void function UpdateScreensContent( array<ApexScreenState> screenList )
 {
-	if ( GetGameState() >= eGameState.WinnerDetermined )
-		return
-
-
 	entity localViewPlayer = GetLocalViewPlayer()
 	bool isCrypto          = PlayerHasPassive( localViewPlayer, ePassives.PAS_CRYPTO )
 	bool inCamera          = IsValid( localViewPlayer.p.cryptoActiveCamera )
@@ -1009,16 +1012,35 @@ void function UpdateScreensContent( array<ApexScreenState> screenList )
 		else if ( screen.isOutsideCircle )
 			shouldShow = false
 
+		bool needShutdown = ((screen.rui != null) && (!shouldShow || (screen.ruiToCreate != screen.ruiLastCreated)))
+		if ( needShutdown )
+		{
+			// #if DEVELOPER
+				// ++s_countDestruction
+				// Warning ( "Destroying screen" )
+				// Warning( "------------------" + s_countDestruction )
+			// #endif
+			
+			screen.commenceTime = -1.0
+			Signal( screen, "ScreenOff" ) // to clean up any threads expecting the RUI to exist
+
+			CleanupNestedGladiatorCard( screen.nestedGladiatorCard0Handle )
+
+			RuiDestroyIfAlive( screen.rui )
+			screen.rui = null
+		}
+		
+		if ( GetGameState() >= eGameState.WinnerDetermined )
+			return
 
 		bool doStandardVars = (!screen.overrideInfoIsValid || !screen.overrideInfo.skipStandardVars)
-
 		bool needStartup = (shouldShow && (screen.rui == null))
 		if ( needStartup )
 		{
 			// #if DEVELOPER
-				// ++countCreation
+				// ++s_countCreation
 				// Warning ( "Creating screen" )
-				// Warning( "------------------" + countCreation )
+				// Warning( "------------------" + s_countCreation )
 			// #endif
 			
 			screen.rui = CreateApexScreenRUIElement( screen )
@@ -1033,28 +1055,6 @@ void function UpdateScreensContent( array<ApexScreenState> screenList )
 			}
 		}
 		
-		// RUI: Couldn't allocate a client rui instance.
-		
-		//because this block sets the screen.rui to null on the same frame, the needstartup condition can potentially 
-		//execute due to the screen.rui being null and bool shouldshow being true
-		//(mk): TEMP FIX: moved shutdown after startup check. Needs more tracking to determine why shouldShow is not handling this (todo after release)
-		bool needShutdown = ((screen.rui != null) && (!shouldShow || (screen.ruiToCreate != screen.ruiLastCreated)))
-		if ( needShutdown )
-		{
-			// #if DEVELOPER
-				// ++countDestruction
-				// Warning( "Is this block being reached?? --------------------- " + countDestruction )
-			// #endif	
-			
-			screen.commenceTime = -1.0
-			Signal( screen, "ScreenOff" ) // to clean up any threads expecting the RUI to exist
-
-			CleanupNestedGladiatorCard( screen.nestedGladiatorCard0Handle )
-
-			RuiDestroyIfAlive( screen.rui )
-			screen.rui = null
-		}
-
 		if ( !shouldShow )
 			continue
 		if ( !doStandardVars )
@@ -1092,8 +1092,8 @@ void function UpdateScreensContent( array<ApexScreenState> screenList )
 
 		#if(false)
 
-
-#endif //
+		#endif //
+		
 
 		thread UpdateScreenDetails( screen, desiredTransitionStyle, gcardPresentation, desiredPlayerEHI, lifestateOverride )
 	}
@@ -1280,9 +1280,14 @@ bool function OnEnumStaticPropRui( StaticPropRui staticPropRuiInfo )
 		}
 	}
 
+	// NOTE: model names used to have random backslashes in them. I changed them to always have forward slashes, but I left both ways in here to keep compatibility.
+	// When the slash change has had time to settle, we should remove the backslash versions.
 	bool needsScreenPositionSetup = true
 	switch( staticPropRuiInfo.modelName )
 	{
+		case "mdl/olympus/path_tt_screen_01_off.rmdl":
+		case "mdl/eden/beacon_small_screen_02_off.rmdl":
+		case "mdl/olympus\\path_tt_screen_01_off.rmdl":
 		case "mdl/eden\\beacon_small_screen_02_off.rmdl":
 			apexScreen.uvMin = <0.0, 0.295, 0.0>
 			apexScreen.uvMax = <1.0, 0.705, 0.0>
@@ -1290,11 +1295,16 @@ bool function OnEnumStaticPropRui( StaticPropRui staticPropRuiInfo )
 			needsScreenPositionSetup = false
 			break
 
+		case "mdl/thunderdome/apex_screen_05.rmdl":
 		case "mdl/thunderdome\\apex_screen_05.rmdl":
 			apexScreen.uvMin = <0.235, 0.0, 0.0>
 			apexScreen.uvMax = <0.765, 1.0, 0.0>
 			break
 
+		case "mdl/thunderdome/survival_modular_flexscreens_01.rmdl":
+		case "mdl/thunderdome/survival_modular_flexscreens_02.rmdl":
+		case "mdl/thunderdome/survival_modular_flexscreens_03.rmdl":
+		case "mdl/thunderdome/survival_modular_flexscreens_04.rmdl":
 		case "mdl/thunderdome\\survival_modular_flexscreens_01.rmdl":
 		case "mdl/thunderdome\\survival_modular_flexscreens_02.rmdl":
 		case "mdl/thunderdome\\survival_modular_flexscreens_03.rmdl":
@@ -1303,6 +1313,7 @@ bool function OnEnumStaticPropRui( StaticPropRui staticPropRuiInfo )
 			apexScreen.uvMax = <0.684, 1.0, 0.0>
 			break
 
+		case "mdl/thunderdome/survival_modular_flexscreens_05.rmdl":
 		case "mdl/thunderdome\\survival_modular_flexscreens_05.rmdl":
 			apexScreen.uvMin = <0.0, 0.215, 0.0>
 			apexScreen.uvMax = <1.0, 0.785, 0.0>
@@ -1325,7 +1336,7 @@ bool function OnEnumStaticPropRui( StaticPropRui staticPropRuiInfo )
 		bool isVertical         = (screenAspectRatio < 1.1)
 		if ( !isVertical )
 		{
-			//
+			//apexScreen.screenPosition = eApexScreenPosition.TV_LIKE
 			apexScreen.position = eApexScreenPosition.DISABLED
 		}
 		else
@@ -1403,10 +1414,9 @@ var function CreateApexScreenRUIElement( ApexScreenState screen )
 		RuiSetBool( rui, "sharesPropWithEnvironmentalRUI", true )
 
 	RuiTrackInt( rui, "cameraNearbyEnemySquads", GetLocalViewPlayer(), RUI_TRACK_SCRIPT_NETWORK_VAR_INT, GetNetworkedVariableIndex( "cameraNearbyEnemySquads" ) )
-	RuiSetFloat3( rui, "logoTint", <1.0, 1.0, 1.0> )
 	
 	#if(true)
-		if ( IsFallLTM() )
+		if ( UseFallBanners() )
 		{
 			RuiSetImage( rui, "overlayImg", $"rui/rui_screens/banner_c_shadowfall" )
 			RuiSetFloat3( rui, "logoTint", <1.0, 1.0, 1.0> )

@@ -26,11 +26,6 @@ void function BaseGametype_Init_MPSP()
 
 void function CodeCallback_OnClientConnectionCompleted( entity player )
 {
-	#if TRACKER && HAS_TRACKER_DLL //TODO(dw): server messages
-		if( IsBotEnt( player ) )
-			return
-	#endif
-		
 	player.p.activeGladiatorCardStatTrackerEntries = [0,0,0]
 
 	ShGRX_OnClientConnectionCompleted( player )
@@ -552,9 +547,7 @@ void function CodeCallback_OnPlayerKilled( entity player, var damageInfo )
 		{
 			// Added via AddCallback_OnTitanDoomed
 			foreach ( callbackFunc in svGlobal.onTitanDoomedCallbacks )
-			{
 				callbackFunc( player, damageInfo )
-			}
 		}
 	}
 	else
@@ -563,14 +556,11 @@ void function CodeCallback_OnPlayerKilled( entity player, var damageInfo )
 			CreateNoSpawnArea( team, TEAM_INVALID, player.GetOrigin(), DEATHCAM_TIME + 0.5, 256 )
 	}
 
-	entity attacker = DamageInfo_GetAttacker( damageInfo )
 	if ( damageSourceId != eDamageSourceId.round_end )
 	{
 		// Don't give players scoreboard deaths after the match is over
-		if ( GamePlayingOrSuddenDeath() )
-		{
+		if ( GamePlayingOrSuddenDeath() && CountDamageSourceAsDeath( damageSourceId ) )
 			player.AddToPlayerGameStat( PGS_DEATHS, 1 )
-		}
 	}
 
 	PlayerOrNPCKilled( player, damageInfo ) //Fire OnPlayerKilled Callbacks
@@ -605,7 +595,8 @@ void function CodeCallback_OnPlayerKilled( entity player, var damageInfo )
 
 		if ( soundAlias != "" )
 		{
-			// EmitSoundOnEntityExceptToPlayers( player, [player, attacker], soundAlias )
+			// entity attacker = DamageInfo_GetAttacker( damageInfo )
+			// EmitSoundOnEntityExceptToPlayers( player, [ player, attacker ], soundAlias )
 		}
 	}
 
@@ -813,7 +804,7 @@ void function PostDeathThread( entity player, var damageInfo )
 	//if( GamemodeUtility_IsSpectatorEnabled() )
 		//DecideRespawnPlayer( player, false )
 	
-	thread ObserverThread( player ) //Cafe was here
+	thread ObserverThread( player )
 }
 
 void function WaitForDeathCamFadeOrAbort( entity player, float deathCamBeforeFadeDuration )

@@ -24,27 +24,30 @@ void function Flowstate_LgDuels1v1_Init()
 {
 	if( MapName() == eMaps.mp_rr_canyonlands_staging && Playlist() == ePlaylists.fs_lgduels_1v1 )
 	{
-		AddCallback_FlowstateSpawnsSettings( InitPreSpawnSystemSettings)	
-		SetCallback_FlowstateSpawnsOffset( LGDuels_Spawns_Offset ) //used to move all spawns by an offset
-		AddCallback_FlowstateSpawnsPostInit( Init_LGDuels_Spawns )
+		SpawnLGProps()
+		SpawnLGProps2()
+		
+		SpawnSystem_UseNavMeshCorrection( false )
+		AddCallback_SpawnsSettings( InitPreSpawnSystemSettings )	
+		//SpawnSystem_SetOffset( NewLocPair( LG_DUELS_OFFSET_ORIGIN, ZERO_VECTOR ) ) //used to move all spawns by an offset  //edit:  Spawns now have correct coordinates in pak.
+		//AddCallback_SpawnsPostInit( Init_LGDuels_Spawns )
 	}
 	else
 	{
-		AddCallback_FlowstateSpawnsSettings
+		AddCallback_SpawnsSettings
 		(
 			void function()
 			{
 				SpawnSystem_SetCustomPlaylist( AllPlaylistsArray()[ ePlaylists.fs_1v1 ] ) //override hack
 			}
 		)
-		
 	}
 
 	#if TRACKER && HAS_TRACKER_DLL
-		if( Flowstate_IsLGDuels() )
-		{
-			AddCallback_PlayerData( "LgDuelsSetting", LgDuelLoadSettings )
-		}	
+		// if( Flowstate_IsLGDuels() ) //deprecated
+		// {
+		// 	Tracker_RegisterPlayerData( "LgDuelsSetting", LgDuelLoadSettings )
+		// }	
 	#endif
 	
 	AddCallback_OnClientConnected( INIT_LGDuels_Player )
@@ -74,13 +77,13 @@ void function INIT_LGDuels_Player( entity player )
 	AddClientCommandCallback( "handicap", ClientCommand_mkos_LGDuel_p_damage )
 	
 	#if TRACKER && HAS_TRACKER_DLL
-		AddClientCommandCallback( "SaveLgSettings", ClientCommand_mkos_LGDuel_settings )
+		//AddClientCommandCallback( "SaveLgSettings", ClientCommand_mkos_LGDuel_settings ) //deprecated
 	#endif
 	
 	player.p.hitsound = HIT_0
 	
-	CreatePanelText( player, "", "LG Duels by @CafeFPS and..", < 3450.38, -9592.87, -9888.37 >, < 354.541, 271.209, 0 >, false, 1.5, 1)
-	CreatePanelText( player, "mkos ", "", < 3472.44, -9592.87, -9888.37 >, < 354.541, 271.209, 0 >, false, 3, 2)
+	// CreatePanelText( player, "", "LG Duels by @CafeFPS and..", < 3450.38, -9592.87, -9888.37 >, < 354.541, 271.209, 0 >, false, 1.5, 1)
+	// CreatePanelText( player, "mkos ", "", < 3472.44, -9592.87, -9888.37 >, < 354.541, 271.209, 0 >, false, 3, 2)
 }
 
 void function Player1v1Gamestate( entity player, int state )
@@ -134,42 +137,42 @@ void function Player1v1Gamestate( entity player, int state )
 	}	
 }
 
-void function LgDuelLoadSettings( entity player, string data )
-{
-	if( data == "NA" || data == "" )
-		return
+// void function LgDuelLoadSettings( entity player, string data ) //deprecated
+// {
+// 	if( data == "NA" || data == "" )
+// 		return
 	
-	array<string> values = split( data, "|" )
+// 	array<string> values = split( data, "|" )
 	
-	if( values.len() < 8 )
-		return
+// 	if( values.len() < 8 )
+// 		return
 	
-	foreach( str in values )
-	{
-		if( !IsNumeric( str ) )
-		{
-			#if DEVELOPER
-				sqerror( "Data for lgduel setting not numeric: " + str + ";Data:" + data )
-			#endif 
+// 	foreach( str in values )
+// 	{
+// 		if( !IsStringNumeric( str ) )
+// 		{
+// 			#if DEVELOPER
+// 				sqerror( "Data for lgduel setting not numeric: " + str + ";Data:" + data )
+// 			#endif 
 			
-			return
-		}
-	}
+// 			return
+// 		}
+// 	}
 	
-	Remote_CallFunction_NonReplay
-	( 
-		player, 
-		"ServerCallback_SetLGDuelPesistenceSettings", 
-		values[0].tofloat(), 
-		values[1].tointeger(), 
-		values[2].tointeger(), 
-		values[3].tointeger(), 
-		values[4].tofloat(), 
-		values[5].tointeger(), 
-		values[6].tointeger(), 
-		values[7].tointeger() 
-	)
-}
+// 	Remote_CallFunction_NonReplay
+// 	( 
+// 		player, 
+// 		"ServerCallback_SetLGDuelPesistenceSettings", 
+// 		values[0].tofloat(), 
+// 		values[1].tointeger(), 
+// 		values[2].tointeger(), 
+// 		values[3].tointeger(), 
+// 		values[4].tofloat(), 
+// 		values[5].tointeger(), 
+// 		values[6].tointeger(), 
+// 		values[7].tointeger() 
+// 	)
+// }
 
 
 //LGDuel
@@ -213,20 +216,12 @@ bool function ClientCommand_mkos_LGDuel_settings( entity player, array<string> a
 }
 
 LocPairData function Init_LGDuels_Spawns()
-{
-	SpawnLGProps()
-	SpawnLGProps2()
-				
+{		
 	LocPair panels = NewLocPair( < 3480.92, -9218.92, -10252 >, < 360, 270, 0 > )
 	
 	Gamemode1v1_SetWaitingRoomRadius( 2400 )
 	
 	return SpawnSystem_CreateLocPairObject( [], false, null, panels )
-}
-
-LocPair function LGDuels_Spawns_Offset()
-{
-	return NewLocPair( LG_DUELS_OFFSET_ORIGIN, ZERO_VECTOR )
 }
 
 string function IntToSound( string num )
@@ -277,7 +272,7 @@ bool function ClientCommand_mkos_LGDuel_hitsound( entity player, array<string> a
 			return true
 		}				
 					
-		if( args.len() > 0 && !IsNumeric( param, 0, 16 ) )
+		if( args.len() > 0 && !IsStringNumeric( param, 0, 16 ) )
 		{
 			LocalMsg( player, "#FS_FAILED", "#FS_HitsoundNumFail" )
 			return true

@@ -110,8 +110,9 @@ void function ClScoreboardMp_Init()
 	file.max_teams = GetCurrentPlaylistVarInt( "max_teams", MAX_TEAM_SLOTS )
 }
 
-void function ReInitScoreboard( )
+void function ReInitScoreboard()
 {
+	//Warning( FUNC_NAME() )
 	file.hasFocus = false
 	thread clGlobal.hideScoreboardFunc()
 	clGlobal.initScoreboardFunc()
@@ -119,34 +120,91 @@ void function ReInitScoreboard( )
 
 void function ScoreboardFocus( entity player )
 { 
-	thread ShowScoreboardMP()
+	//Warning( FUNC_NAME() )
+	//PrintCallStack()
+	
+	if( !clGlobal.isScoreboardShown || file.hasFocus )
+	{
+		//Warning( "Return From: " + FUNC_NAME() )
+		return
+	}
+		
+	//thread ShowScoreboardMP()
+	file.hasFocus = true
+}
+
+void function ForceScoreboardFocus()
+{
+	//Warning( FUNC_NAME() )
+	
+	if( !clGlobal.isScoreboardShown || file.hasFocus )
+	{
+		//Warning( "Return From: " + FUNC_NAME() )
+		return
+	}
+		
+	//thread ShowScoreboardMP()
 	file.hasFocus = true
 }
 
 void function ScoreboardLoseFocus( entity player )
 {
-	thread HideScoreboardMP()
+	//Warning( FUNC_NAME() )
+	
+	//mAssert( file.hasFocus, "no focus" )
+	if ( !clGlobal.isScoreboardShown )
+	{
+		//Warning( "Return From: " + FUNC_NAME() )
+		return
+	}
+		
+	//thread HideScoreboardMP()
 	file.hasFocus = false
 }
 
-void function ForceScoreboardLoseFocus()
+void function ForceScoreboardLoseFocus() //remote func
 {
-	thread HideScoreboardMP()
+	//Warning( FUNC_NAME() )
+	
+	//mAssert( file.hasFocus, "no focus" )
+	if ( !clGlobal.isScoreboardShown )
+	{
+		//Warning( "Return From: " + FUNC_NAME() )
+		return
+	}
+	
+	if( FS_ShouldHookMapKey() )
+	{
+		entity localPlayer = GetLocalClientPlayer()
+		
+		if( IsValid( localPlayer ) )
+			localPlayer.ClientCommand( "toggle_map" )
+	}
+	
+	// thread HideScoreboardMP()
 	file.hasFocus = false
 }
 
-void function ForceScoreboardFocus()
+void function ScoreboardToggleFocusCustom( entity player )
 {
-	thread ShowScoreboardMP()
-	file.hasFocus = true
+	Fullmap_SetVisible( false )
+	ScoreboardToggleFocus( player )
 }
 
 void function ScoreboardToggleFocus( entity player )
 {
+	//Warning( FUNC_NAME() )
+
 	if ( file.hasFocus )
+	{
+		//Warning( FUNC_NAME() + " Has Focus, call ScoreboardLoseFocus" )
 		ScoreboardLoseFocus( player )
+	}
 	else
+	{
+		//Warning( FUNC_NAME() + " No Focus, call ScoreboardFocus" )
 		ScoreboardFocus( player )
+	}
 }
 
 int function GetEnemyScoreboardTeam()
@@ -186,6 +244,9 @@ void function InitScoreboardMP()
 	file.backgroundCustom = HudElement( "FS_DMScoreboard_Frame" )
 	file.titleCustom = HudElement( "FS_DMScoreboard_Title" )
 	file.hintCustom = HudElement( "FS_DMScoreboard_Hint" )
+	
+	if( g_bIs1v1GameType() ) //Playlist() == ePlaylists.fs_1v1 || Playlist() == ePlaylists.fs_lgduels_1v1 )
+		Hud_SetText( file.hintCustom, "%toggle_map% " + Localize( "#CLOSE" ) )
 	
 	string title = "SCOREBOARD"
 
@@ -379,7 +440,7 @@ void function ShowScoreboardMP()
 		callbackFunc()
 
 	entity localPlayer = GetLocalClientPlayer()
-	
+		
 	Hud_SetVisible( file.backgroundCustom, true )
 	Hud_SetVisible( file.titleCustom, true )
 	// if( IsAlive( GetLocalClientPlayer() ) && GetCurrentPlaylistName() == "fs_haloMod" || IsAlive( GetLocalClientPlayer() ) && GetCurrentPlaylistName() == "fs_haloMod_oddball" || IsAlive( GetLocalClientPlayer() ) && GetCurrentPlaylistName() == "fs_1v1" && GetCurrentPlaylistName() == "fs_lgduels_1v1" )
@@ -462,7 +523,7 @@ void function ShowScoreboardMP()
 		Assert( clGlobal.isScoreboardShown )
 
 		//if( IsAlive( GetLocalClientPlayer() ) && GetCurrentPlaylistName() == "fs_haloMod_ctf" || IsAlive( GetLocalClientPlayer() ) && GetCurrentPlaylistName() == "fs_haloMod" || IsAlive( GetLocalClientPlayer() ) && GetCurrentPlaylistName() == "fs_haloMod_oddball" || IsAlive( GetLocalClientPlayer() ) && GetCurrentPlaylistName() == "fs_1v1" && GetCurrentPlaylistName() == "fs_lgduels_1v1" )
-		if( IsAlive( GetLocalClientPlayer() ) && Playlist() == ePlaylists.fs_haloMod_ctf || IsAlive( GetLocalClientPlayer() ) && Playlist() == ePlaylists.fs_haloMod || IsAlive( GetLocalClientPlayer() ) && Playlist() == ePlaylists.fs_haloMod_oddball || IsAlive( GetLocalClientPlayer() ) && Playlist() == ePlaylists.fs_1v1 && Playlist() == ePlaylists.fs_lgduels_1v1 )
+		if( IsAlive( GetLocalClientPlayer() ) && Playlist() == ePlaylists.fs_haloMod_ctf || IsAlive( GetLocalClientPlayer() ) && Playlist() == ePlaylists.fs_haloMod || IsAlive( GetLocalClientPlayer() ) && Playlist() == ePlaylists.fs_haloMod_oddball || Playlist() == ePlaylists.fs_1v1 || Playlist() == ePlaylists.fs_lgduels_1v1 )
 		{
 			Hud_SetVisible( file.hintCustom, true )
 		}
@@ -669,10 +730,11 @@ void function ShowScoreboardMP()
 
 		RuiSetInt( Hud_GetRui( file.pingText ), "ping", MyPing() )
 
-		if ( allPlayers.len() )
+		int allPlayersLen = allPlayers.len()
+		if ( allPlayersLen )
 		{
-			file.prevPlayer = allPlayers[ (selectedPlayerIndex + allPlayers.len() - 1) % allPlayers.len() ]
-			file.nextPlayer = allPlayers[ (selectedPlayerIndex + 1) % allPlayers.len() ]
+			file.prevPlayer = allPlayers[ ( selectedPlayerIndex + allPlayersLen - 1 ) % allPlayersLen ]
+			file.nextPlayer = allPlayers[ ( selectedPlayerIndex + 1 ) % allPlayersLen ]
 		}
 		else
 		{
@@ -762,7 +824,7 @@ void function UpdateScoreboardForGamemode( entity player, var rowRui, var scoreH
 
 		case 1:
 			playerScore1Header = headers[ 0 ]
-			if (IsValid( player ))
+			if ( IsValid( player ) )
 			{
 				if( Gamemode() == eGamemodes.CUSTOM_CTF )
 					playerScore1 = player.GetPlayerNetInt( "captures" )
@@ -810,7 +872,7 @@ void function HideScoreboardMP()
 
 	ScoreboardFadeOut()
 	
-	WaitFrame()
+	wait 0.1
 
 	file.hasFocus = false
 	file.selectedPlayer = null

@@ -1,0 +1,45 @@
+global function MOTD_Init
+global function AdminCommandOpenMOTD
+
+void function MOTD_Init()
+{
+    if ( GetCurrentPlaylistVarBool( "enable_motd", false ) )
+    {
+		#if DEVELOPER
+			printl( "AddCallback_OnClientConnected( FireRemoteMotd )" )
+		#endif
+		
+        AddCallback_OnClientConnected( FireRemoteMotd )
+    }
+}
+
+void function FireRemoteMotd( entity player )
+{	
+	thread
+	(
+		void function() : ( player )
+		{
+			if ( !player.p.isConnected )
+				waitthread WaitSignalOrTimeout( player, 20, "OnConnected", "OnDestroy" )
+			
+			//(mk): Decided against late display, commenting the below.
+			
+			// WaitForGameState( eGameState.Playing )
+			// WaitForChampionToFinish()
+			
+			if ( IsValid( player ) && player.p.isConnected )		
+				Remote_CallFunction_UI( player, "UI_Callback_MOTD", false )
+		}
+	)()
+}
+
+bool function AdminCommandOpenMOTD( entity player )
+{
+	if( !IsValid( player ) || !player.p.isConnected )
+		return false
+		
+	Remote_CallFunction_UI( player, "UI_Callback_MOTD", true ) //(mk): still respects player's settings and wont show if they have it disabled	
+	SendResponse( player, "An admin has sent the motd for you to review", true )
+	
+	return true
+}

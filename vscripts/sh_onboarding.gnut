@@ -60,6 +60,9 @@ global function SV_CL_Onboarding_Init
 	global function SetPlayerSettings
 	global function Flowstate_ApplyModifiedMovementToPlayer
 	
+	global function Onboarding_SetNegateDespawnStats
+	global function Onboarding_GetNegateDespawnStats
+	
 	#if DEVELOPER 
 		global function DEV_SetMovement
 	#endif
@@ -115,12 +118,15 @@ global bool script_bGiveskins = false
 
 struct
 {
-	void functionref(entity player ) ObserverThreadOverrideCallback = null
+	void functionref( entity player ) ObserverThreadOverrideCallback = null
 	int flowstate_modified_movement
 	
 	#if SERVER
 		bool use_r2_deathcam
+		bool bReserveAdminSlot
+		bool bGamemodeIgnoresDespawnOrSuicide
 	#endif
+	
 } file
 
 
@@ -151,6 +157,8 @@ void function SV_CL_Onboarding_Init()
 		
 		if( Gamemode() == eGamemodes.SURVIVAL )
 			AddCallback_GameStateEnter( eGameState.Postmatch, void function() : (){ SetAutoReloadState( true ) } ) //(mk): check for native reload
+	
+		file.bReserveAdminSlot = GetCurrentPlaylistVarBool( "reserve_admin_slot", false )
 	#endif
 }
 
@@ -165,6 +173,16 @@ void function SV_CL_Onboarding_Init()
 	
 	This part describes the onboarding sequences: threaded functions which control the onboarding.
 */
+
+void function Onboarding_SetNegateDespawnStats( bool setting )
+{
+	file.bGamemodeIgnoresDespawnOrSuicide = setting
+}
+
+bool function Onboarding_GetNegateDespawnStats()
+{
+	return file.bGamemodeIgnoresDespawnOrSuicide
+}
 
 void function Sequence_WaitingForPlayers()
 {
@@ -215,7 +233,7 @@ void function Sequence_WaitingForPlayers()
 			
 			if( Gamemode() != eGamemodes.CUSTOM_CTF )
 			{
-				ScreenCoverTransition_Player(player, Time() + 2)
+				ScreenCoverTransition_Player( player, Time() + CharSelect_GetIntroTransitionDuration() )
 			} 
 			else
 			{
@@ -226,7 +244,7 @@ void function Sequence_WaitingForPlayers()
 	
 	#if TRACKER
 		if( bLog() && !Tracker_IsBatchStatsLoaded() && Flowstate_IsTrackerSupportedMode() )
-			waitthread WaitSignalOrTimeout( svGlobal.levelEnt, Tracker_GetMaxWaitForBatchLoad(), "BatchFetchComplete" )
+			waitthread WaitSignalOrTimeout( tracker.signalEnt, Tracker_GetMaxWaitForBatchLoad(), "BatchFetchComplete" )
 	
 		WaitFrame()
 	#endif
@@ -247,7 +265,7 @@ void function Sequence_WaitingForPlayers()
 
 void function Sequence_PickLoadout()
 {
-	if ( Playlist() == ePlaylists.fs_scenarios || !Survival_CharacterSelectEnabled() || Gamemode() != eGamemodes.SURVIVAL || Playlist() == ePlaylists.fs_haloMod_survival || Gamemode() == eGamemodes.fs_snd ) 
+	if ( Playlist() == ePlaylists.fs_scenarios || !Survival_CharacterSelectEnabled() || Gamemode() != eGamemodes.SURVIVAL || Playlist() == ePlaylists.fs_haloMod_survival || Gamemode() == eGamemodes.fs_snd || Gamemode() == eGamemodes.fs_spieslegends ) 
 	{
 		foreach ( player in GetPlayerArray() )
 		{
@@ -348,7 +366,7 @@ void function Sequence_PickLoadout()
 	thread Sequence_Prematch()
 }
 
-void function Flowstate_AssignUniqueCharacterForPlayer(entity player, bool lock)
+void function Flowstate_AssignUniqueCharacterForPlayer( entity player, bool lock )
 {
 	// Warning( "Flowstate_AssignUniqueCharacterForPlayer" )
 	// DumpStack()
@@ -385,11 +403,20 @@ void function Flowstate_AssignUniqueCharacterForPlayer(entity player, bool lock)
 	}
 
 	ItemFlavor initialCharacter
+	int preferredLegendGUID = player.p.preferredLegendGUID //(mk): only gets set from lobby selection after passing checks in: ShouldAutoSelectPreferredLegend 
 	
-	if( characters.len() == 0) //Shouldn't happen, but just in case. (Teams of more than 10 players probably)
+	if( characters.len() == 0 )//Shouldn't happen, but just in case. (Teams of more than 10 players probably)
+	{
 		initialCharacter = GetAllCharacters().getrandom()
+	}
+	else if( preferredLegendGUID != -1 && IsValidCharacterGUID( preferredLegendGUID, player ) )
+	{
+		initialCharacter = GetItemFlavorByGUID( preferredLegendGUID )
+	}
 	else
+	{
 		initialCharacter = characters.getrandom()
+	}
 	
 	player.SetPlayerNetInt( "characterSelectFocusIndex", ConvertItemFlavorToLoadoutSlotContentsIndex( Loadout_CharacterClass(), initialCharacter ) )
 	
@@ -409,7 +436,7 @@ void function Sequence_Prematch()
 	if ( CharSelect_ChampionSquadIntroEnabled() )
 		wait CharSelect_GetOutroChampionPresentDuration()
 
-	if( Gamemode() == eGamemodes.fs_snd )
+	if( Gamemode() == eGamemodes.fs_snd || Gamemode() == eGamemodes.fs_spieslegends )
 		return
 	
 	// The gamemode handles everything past this point
@@ -507,7 +534,7 @@ void function TakeLoadoutRelatedWeapons( entity player )
 
 void function GiveLoadoutRelatedWeapons( entity player )
 {
-	TakeLoadoutRelatedWeapons(player)
+	TakeLoadoutRelatedWeapons( player ) //(mk): This takes melee, but it's not given back here for 1v1.
 	
 	ItemFlavor character = LoadoutSlot_GetItemFlavor( ToEHI( player ), Loadout_CharacterClass() )
 	ItemFlavor tactical = CharacterClass_GetTacticalAbility( character )
@@ -518,7 +545,7 @@ void function GiveLoadoutRelatedWeapons( entity player )
 	player.GiveOffhandWeapon( CharacterAbility_GetWeaponClassname( tactical ), OFFHAND_TACTICAL, [] )
 	player.GiveOffhandWeapon( CharacterAbility_GetWeaponClassname( ultimate ), OFFHAND_ULTIMATE, [] )
 
-	if( !is1v1EnabledAndAllowed() || isScenariosMode() ) // Todo: unweave gamemode logic ()
+	if( !is1v1EnabledAndAllowed() && !isScenariosMode() ) // Todo: unweave gamemode logic ()
 	{
 		player.GiveWeapon( "mp_weapon_melee_survival", WEAPON_INVENTORY_SLOT_PRIMARY_2, [] )
 		player.GiveOffhandWeapon( "melee_pilot_emptyhanded", OFFHAND_MELEE, [] )
@@ -576,9 +603,6 @@ bool script_bRespawnInitComplete = false
 
 void function RespawnBehavior_Init()
 {
-	script_bHighlight = ( Gamemode() == eGamemodes.SURVIVAL || Gamemode() == eGamemodes.fs_snd || Playlist() == ePlaylists.fs_scenarios )
-	script_bGiveskins = GetCurrentPlaylistVarBool( "flowstate_giveskins_characters", false )
-	
 	table<string, string> possibleMods = {
 		survival_jumpkit_enabled = "enable_doublejump",
 		survival_wallrun_enabled = "enable_wallrun"
@@ -587,14 +611,30 @@ void function RespawnBehavior_Init()
 	foreach ( playlistVar, modName in possibleMods )
 		if ( GetCurrentPlaylistVarBool( playlistVar, false ) || GetCurrentPlaylistVarInt( "flowstate_modified_movement", 0 ) == 1 )
 			enabledMods.append( modName )
-		
+	
+	// Enables zero g
+	if( GetCurrentPlaylistVarBool( "enable_zero_g", false ) )
+		enabledMods.append( "zero_g" )
+
+	// Enables ads hover
+	if( GetCurrentPlaylistVarBool( "enable_ads_hover", false ) )
+		enabledMods.append( "pas_ads_hover" )
+	
+	// Disable slides
+	if( GetCurrentPlaylistVarBool( "disable_slide", false ) )
+		enabledMods.append( "disable_slide" )
+	
+	// Removes teammates names
+	if( GetCurrentPlaylistVarBool( "disable_targetinfo", false ) )
+		enabledMods.append( "disable_targetinfo" )
+	
 	script_bRespawnInitComplete = true
 }
 
 void function DecideRespawnPlayer( entity player, bool giveLoadoutWeapons = true )
 {
 	#if DEVELOPER
-		Warning( "DecideRespawnPlayer: " + string( player ) )
+		// Warning( "DecideRespawnPlayer: " + string( player ) )
 		// DumpStack()
 		mAssert( script_bRespawnInitComplete, "RespawnBehavior_Init() --- wasn't ready in DecideRespawnPlayer()" )
 	#endif
@@ -614,7 +654,7 @@ void function DecideRespawnPlayer( entity player, bool giveLoadoutWeapons = true
 	asset characterSetFile = CharacterClass_GetSetFile( playerCharacter )
 	player.SetPlayerSettingsWithMods( characterSetFile, enabledMods )
 
-	// Already executed in CodeCallback_OnPlayerRespawned
+	// (mk): Already executed in CodeCallback_OnPlayerRespawned
 	// Remote_CallFunction_NonReplay( player, "ServerCallback_YouRespawned" )
 
 	PlayerStopSpectating( player )
@@ -629,28 +669,34 @@ void function DecideRespawnPlayer( entity player, bool giveLoadoutWeapons = true
 	Survival_SetInventoryEnabled( player, giveLoadoutWeapons )
 
 	player.SetPlayerNetInt( "respawnStatus", eRespawnStatus.NONE )
-
 	player.SetPlayerNetBool( "pingEnabled", true )
-	player.SetHealth( player.GetMaxHealth() )
+
+	if( IsAlive( player ) ) //(mk): idk yet. sphaghetti
+		player.SetHealth( player.GetMaxHealth() )
 
 	UpdatePlayerCounts()
 	
-	if( Gamemode() == eGamemodes.map_editor_deprecated ) //todo move to mode specific callback
-		thread (void function() : ( player )
-		{
-			if(IsValid(player.GetOffhandWeapon( OFFHAND_TACTICAL )))
+	if( Gamemode() == eGamemodes.map_editor_deprecated ) //(mk): todo move to mode specific callback
+	{
+		thread
+		( 
+			void function() : ( player )
 			{
-				player.TakeOffhandWeapon( OFFHAND_TACTICAL )
-				player.GiveOffhandWeapon( "mp_weapon_editor", OFFHAND_TACTICAL, [] )
-				player.SetActiveWeaponByName( eActiveInventorySlot.mainHand, "mp_weapon_editor" )
+				if( IsValid( player.GetOffhandWeapon( OFFHAND_TACTICAL ) ) )
+				{
+					player.TakeOffhandWeapon( OFFHAND_TACTICAL )
+					player.GiveOffhandWeapon( "mp_weapon_editor", OFFHAND_TACTICAL, [] )
+					player.SetActiveWeaponByName( eActiveInventorySlot.mainHand, "mp_weapon_editor" )
+				}
+				if( IsValid( player.GetOffhandWeapon( OFFHAND_ULTIMATE ) ) )
+					player.TakeOffhandWeapon( OFFHAND_ULTIMATE )
+				
+				wait 1
+				Message( player, "PROP DYNAMIC MAP EDITOR", "Made by Sal, Fireproof, Pebbers & JustANormalUser. Misc fixes by CaféFPS.", 8 )
 			}
-			if(IsValid(player.GetOffhandWeapon( OFFHAND_ULTIMATE )))
-				player.TakeOffhandWeapon( OFFHAND_ULTIMATE )
-			
-			wait 1
-			Message(player, "PROP DYNAMIC MAP EDITOR", "Made by Sal, Fireproof, Pebbers & JustANormalUser. Misc fixes by CaféFPS.", 8)
-		})()
-		
+		)()
+	}
+	
 	if( player.IsThirdPersonShoulderModeOn() )
 		player.SetThirdPersonShoulderModeOn() // If you respawn in third person, it will automatically revert to first person, so turn it on again
 
@@ -664,7 +710,7 @@ void function DecideRespawnPlayer( entity player, bool giveLoadoutWeapons = true
 		Highlight_SetFriendlyHighlight( player, "sp_friendly_hero" )
 	}
 	
-	Flowstate_ApplyModifiedMovementToPlayer( player )
+	Flowstate_ApplyModifiedMovementToPlayer( player ) //(mk)todo: check, shouldn't need to reapply every spawn.
 
 	if( Playlist() == ePlaylists.fs_scenarios )
 		return
@@ -675,14 +721,17 @@ void function DecideRespawnPlayer( entity player, bool giveLoadoutWeapons = true
 		CharacterSkin_Apply( player, characterSkinsA[characterSkinsA.len()-RandomIntRangeInclusive(1,4)])
 	}
 
-	if( player.p.assignedCustomModel != -1 )
+	//if( player.p.assignedCustomModel != -1 )//Custom models cause engine issues, disabling for now til models are updated. - Kral
 	{
-		Flowstate_SetAssignedCustomModelToPlayer( player, player.p.assignedCustomModel )
-	}	
+		//Flowstate_SetAssignedCustomModelToPlayer( player, player.p.assignedCustomModel )
+	}
 	//(mk): commented, already signaled in code callback after DoRespawnPlayer fires
 	
 	// if( Gamemode() != eGamemodes.SURVIVAL && Gamemode() != eGamemodes.WINTEREXPRESS )
 		// player.Signal("OnRespawned")		
+		
+	foreach( callbackFunc in svGlobal.onPlayerRespawnedFinalCallbacks )
+		callbackFunc( player )
 }
 
 // clean up and move to main when completely debugged. Cafe
@@ -704,7 +753,7 @@ bool function DecideRespawnPlayer_Retail( entity player, bool allowSpawnAsObserv
 	if ( IsPVEMode() && (player.p.respawnCount == 0) )
 		return false
 
-	if ( (GetGameState() <= eGameState.WaitingForPlayers) && !PreGame_GetWaitingForPlayersSpawningEnabled() )
+	if ( ( GetGameState() <= eGameState.WaitingForPlayers) && !PreGame_GetWaitingForPlayersSpawningEnabled() )
 	{
 		printf( "%s() - No spawning when waiting for players: %s", FUNC_NAME(), string( player ) )
 		return false
@@ -756,9 +805,9 @@ bool function RespawnTitanPilot( entity player )
 	
 	Flowstate_ApplyModifiedMovementToPlayer( player )
 
-	if( player.p.assignedCustomModel != -1 )
+	//if( player.p.assignedCustomModel != -1 )//Custom models cause engine issues, disabling for now til models are updated. - Kral
 	{
-		Flowstate_SetAssignedCustomModelToPlayer( player, player.p.assignedCustomModel )
+		//Flowstate_SetAssignedCustomModelToPlayer( player, player.p.assignedCustomModel )
 	}
 	
 	if( Playlist() == ePlaylists.fs_haloMod_survival )
@@ -845,16 +894,16 @@ void function Flowstate_SetAssignedCustomModelToPlayer( entity player, int index
 
 void function SetSkydiveEmotesForAllCharacters( entity player ) // You need to unlock the loadout for this to work
 {
-	// array< array< string > > emoteArrays = [ [ "skydive_emote_bangalore_backflip" ], [ "skydive_emote_bloodhound_backflip" ], [ "skydive_emote_caustic_backflip" ], [ "skydive_emote_gibraltar_backflip" , 
-								// "skydive_emote_gibraltar_surf" ], [ "skydive_emote_lifeline_backflip", "skydive_emote_lifeline_windmill" ], [ "skydive_emote_mirage_backflip", 
-								// "skydive_emote_mirage_rodeo" ], [ "skydive_emote_octane_backflip" ], [ "skydive_emote_pathfinder_backflip", "skydive_emote_pathfinder_birdattack" ], 
-								// [ "skydive_emote_wattson_backflip", "skydive_emote_wattson_explorer" ], [ "skydive_emote_wraith_backflip" ] ]
+	/*array< array< string > > emoteArrays = [ [ "skydive_emote_bangalore_backflip" ], [ "skydive_emote_bloodhound_backflip" ], [ "skydive_emote_caustic_backflip" ], [ "skydive_emote_gibraltar_backflip" , 
+								"skydive_emote_gibraltar_surf" ], [ "skydive_emote_lifeline_backflip", "skydive_emote_lifeline_windmill" ], [ "skydive_emote_mirage_backflip", 
+								"skydive_emote_mirage_rodeo" ], [ "skydive_emote_octane_backflip" ], [ "skydive_emote_pathfinder_backflip", "skydive_emote_pathfinder_birdattack" ], 
+								[ "skydive_emote_wattson_backflip", "skydive_emote_wattson_explorer" ], [ "skydive_emote_wraith_backflip" ], [ "skydive_emote_revenant_backflip", "skydive_emote_revenant_snake" ] ]
 
-	// foreach( emoteArray in emoteArrays )
-	// {
-		// for( int i = 0; i < emoteArray.len(); i++ )
-			// ClientCommand( player, "loadouts_devset skydive_emote_" + i + " " + emoteArray[ i ] )
-	// }
+	foreach( emoteArray in emoteArrays )
+	{
+		for( int i = 0; i < emoteArray.len(); i++ )
+			ClientCommand( player, "loadouts_devset skydive_emote_" + i + " " + emoteArray[ i ] )
+	}*/
 }
 #endif
 
@@ -896,7 +945,7 @@ void function OnPlayerKilled( entity victim, entity attacker, var damageInfo )
 	if ( !IsValid( victim ) || !IsValid( attacker ) )
 		return
 	
-	if( is1v1EnabledAndAllowed() )
+	if( file.bGamemodeIgnoresDespawnOrSuicide ) //is1v1EnabledAndAllowed() || Gamemode() == eGamemodes.fs_spieslegends || Playlist() == ePlaylists.fs_realistic_ttv ) 
 	{
 		int sourceId = DamageInfo_GetDamageSourceIdentifier( damageInfo )
 		
@@ -907,22 +956,27 @@ void function OnPlayerKilled( entity victim, entity attacker, var damageInfo )
 	UpdatePlayerCounts()
 		
 	if ( attacker.IsPlayer() && victim.IsPlayer() && attacker != victim )
-	{
-		attacker.SetPlayerNetInt( "kills", attacker.GetPlayerNetInt( "kills" ) + 1 )
-	}
-
+		__IncrementPlayerNetInt( attacker, "kills" )
+		
 	if( Gamemode() == eGamemodes.SURVIVAL )
 		Remote_CallFunction_NonReplay( victim, "ServerCallback_YouDied", attacker, GetHealthFrac( victim ), DamageInfo_GetDamageSourceIdentifier( damageInfo ), DamageInfo_GetDamage( damageInfo ) )
 
-	victim.SetPlayerGameStat( PGS_DEATHS, victim.GetPlayerGameStat( PGS_DEATHS ) + 1 )
+	/*
+		(mk): This is handled at a global level in \mp\_base_gametype_mp.gnut
+		via CodeCallback_OnPlayerKilled with player.AddToPlayerGameStat( PGS_DEATHS, 1 )
+		
+		Incrementing here will only inflate deaths. Commenting this.
+	*/
+	//victim.SetPlayerGameStat( PGS_DEATHS, victim.GetPlayerGameStat( PGS_DEATHS ) + 1 ) 
 	if( Gamemode() != eGamemodes.CUSTOM_CTF && Gamemode() != eGamemodes.fs_snd )
-		victim.SetPlayerNetInt( "deaths", victim.GetPlayerNetInt( "deaths" ) + 1 )
-	
+		__IncrementPlayerNetInt( victim, "deaths" )
+
+	victim.ClearParent()	
 	victim.FreezeControlsOnServer()
 	
 	victim.SetPredictionEnabled( false )
 	
-	if( Gamemode() == eGamemodes.fs_snd || Flowstate_IsHaloMode() && Playlist() != ePlaylists.fs_haloMod_survival ) //todo: init single bool conditional
+	if( Gamemode() == eGamemodes.fs_spieslegends || Gamemode() == eGamemodes.fs_snd || ( Flowstate_IsHaloMode() && Playlist() != ePlaylists.fs_haloMod_survival ) ) //todo: init single bool conditional
 		return
 	
 	victim.StartObserverMode( OBS_MODE_DEATHCAM )
@@ -933,15 +987,40 @@ void function OnPlayerKilled( entity victim, entity attacker, var damageInfo )
 		victim.SetObserverTarget( null )
 }
 
-void function ResetZiplineUseCountOnMantle( entity player )
+void function ServerToClientResetZiplineUseCountMantling( entity player )
 {
-	if( !IsValid( player ) )
+	if( player.p.ziplineUsages == 0 )
 		return
 	
-	//printt("Mantling, zipline use count reset.")
-	
-	player.p.ziplineUsages = 0
-	Remote_CallFunction_NonReplay( player, "ServerCallback_NessyMessage", 40 )
+	if( !player.IsMantling() )
+		return 
+		
+	//printt( "Mantling, zipline use count reset." )	
+	__ResetZiplineCount( player )
+}
+
+void function ServerToClientResetZiplineUseCountGround( entity player )
+{
+	if( player.p.ziplineUsages == 0 )
+		return
+
+	if( player.IsWallHanging() )
+		return
+		
+	if( player.IsWallRunning() )
+		return
+		
+	if( !player.IsOnGround() )
+		return
+		
+	//printl( "Ground, zipline use count reset" )
+	__ResetZiplineCount( player )
+}
+
+void function __ResetZiplineCount( entity player )
+{
+	SetPlayerCanUseZipline( player, true ) //(mk): sets on server
+	//Remote_CallFunction_NonReplay( player, "ServerCallback_NessyMessage", 40 ) //sets on client
 }
 
 void function OnClientDisconnected( entity player )
@@ -953,7 +1032,7 @@ void function OnClientDisconnected( entity player )
 void function OnClientConnectionStarted( entity player )
 {
 	PlayerStopSpectating( player )
-	FS_GiveInitialTeamToPlayer( player )
+	GiveInitialTeamToPlayer( player )
 	
 	if( IsPlayerEliminated( player ) && GetGameState() == eGameState.WaitingForPlayers )
 	{
@@ -974,13 +1053,20 @@ void function OnClientConnected( entity player )
 		FlagSet( "MinPlayersReached" )
 
 	// Min players logic end
-	AddPlayerMovementEventCallback( player, ePlayerMovementEvents.MANTLE, ResetZiplineUseCountOnMantle )
+	AddPlayerMovementEventCallback( player, ePlayerMovementEvents.TOUCH_GROUND, ServerToClientResetZiplineUseCountGround )
+	AddPlayerMovementEventCallback( player, ePlayerMovementEvents.MANTLE, ServerToClientResetZiplineUseCountMantling )
 	UpdatePlayerCounts()
+	
+	GiveInitialTeamToPlayer( player )
 
 	if( GetCurrentPlaylistVarBool( "flowstate_give_random_custom_models_toall", false ) )
 		player.p.assignedCustomModel = RandomIntRangeInclusive(1,10)
 	else
 		player.p.assignedCustomModel = -1
+	
+	
+	if( is1v1EnabledAndAllowed() )
+		player.p.playerCamo = RandomIntRangeInclusive( 1, 10 )
 	
 	bool replaceOrigin = false
 	if( IsDevGamemode() || GetCurrentPlaylistVarBool( "is_practice_map", false ) || Playlist() == ePlaylists.fs_movementrecorder )
@@ -1004,7 +1090,8 @@ void function OnClientConnected( entity player )
 		player.p.respawnPodLanded = true
 		
 		DecideRespawnPlayer( player )
-	} else if( Gamemode() == eGamemodes.SURVIVAL && ( !IsDevGamemode() && !GetCurrentPlaylistVarBool( "is_practice_map", false ) && Playlist() != ePlaylists.fs_movementrecorder ) )
+	} 
+	else if( Gamemode() == eGamemodes.SURVIVAL && ( !IsDevGamemode() && !GetCurrentPlaylistVarBool( "is_practice_map", false ) && Playlist() != ePlaylists.fs_movementrecorder ) )
 	{
 		replaceOrigin = true
 		
@@ -1039,7 +1126,7 @@ void function OnClientConnected( entity player )
 					groundPlayer = teammate
 			}
 
-			if ( !putInPlane && !IsValid( skydiveFollowPlayer ) ) //Cafe was here
+			if ( !putInPlane && !IsValid( skydiveFollowPlayer ) )
 			{
 				//If team is on the ground already, means that player has connected too late, which shouldn't be allowed to respawn in the game.
 				//Let's put the player to spectate.
@@ -1056,12 +1143,14 @@ void function OnClientConnected( entity player )
 
 				thread ObserverThread( player )
 				Remote_CallFunction_ByRef( player, "ServerCallback_ShowDeathScreen" )
-			} else
+			} 
+			else
 			{
 				DecideRespawnPlayer_Retail( player )
 				GiveBasicSurvivalItems( player ) //If player is put in skydive mode and attached to its team mid-flight, we need to give them basic survival items here otherwise it will spawn without melee and basic items. Cafe
 			}
-		} else
+		} 
+		else
 		{
 			DecideRespawnPlayer_Retail( player )
 		}
@@ -1071,23 +1160,28 @@ void function OnClientConnected( entity player )
 	{
 		switch( MapName() )
 		{
-			case eMaps.mp_rr_olympus_mu1:
-				player.SetOrigin( <833.014587, -19103.7949, -4947.88916> )
-				player.SetAngles( <0, -5.91907549, 0> )
+			case eMaps.mp_rr_olympus:
+			case eMaps.mp_rr_olympus_tt:
+				player.SetOrigin( <-29181.76, -794.35, -4312.06> )
+				player.SetAngles( <-1.20, 17.66, 0> )
 			break
 			case eMaps.mp_rr_canyonlands_64k_x_64k:
 			case eMaps.mp_rr_canyonlands_mu1:
 			case eMaps.mp_rr_canyonlands_mu2:
+			case eMaps.mp_rr_canyonlands_mu2_tt:
 			case eMaps.mp_rr_canyonlands_mu1_night:				
 				player.SetOrigin( <-3557.94165, 9962.51074, 3600> )
 				player.SetAngles( <0, 65.3776093, 0> )
 			break
 			
+			case eMaps.mp_rr_desertlands_holiday:
 			case eMaps.mp_rr_desertlands_64k_x_64k:
 			case eMaps.mp_rr_desertlands_64k_x_64k_nx:
+			case eMaps.mp_rr_desertlands_64k_x_64k_mv:
 			case eMaps.mp_rr_desertlands_64k_x_64k_tt:
 			case eMaps.mp_rr_desertlands_mu1:
-			case eMaps.mp_rr_desertlands_holiday:
+			case eMaps.mp_rr_desertlands_mu1_tt:
+			case eMaps.mp_rr_desertlands_mu2:
 				player.SetOrigin( <4838.49658, 13516.8604, -4025.90625> )
 				player.SetAngles( <0, -136.298843, 0> )
 			break
@@ -1104,26 +1198,59 @@ void function OnClientConnected( entity player )
 	player.Signal( "OnConnected" )
 	
 	thread Flowstate_CheckForLv4MagazinesAndRefillAmmo( player )
+	
+	if( file.bReserveAdminSlot )
+		CheckReservedSlotsForAdmin( player )
 }
 
-void function FS_GiveInitialTeamToPlayer( entity player )
+void function CheckReservedSlotsForAdmin( entity player )
+{
+	if( !IsClientCommandAdminEnabled() )
+		return
+		
+	string connectingPlayerUID = player.GetPlatformUID()
+	
+	if( IsServerAdmin( connectingPlayerUID ) )
+		return
+		
+	int maxPlayersForPlaylist = GetMaxPlayersForPlaylistName( GetCurrentPlaylistName() )
+	if( GetConnectedPlayerCount() >= maxPlayersForPlaylist )
+	{
+		foreach( s_player in GetPlayerArray() ) //(mk): This makes sure at least one admin is connected.
+		{
+			if( IsServerAdmin( s_player.GetPlatformUID() ) )
+				return
+		}
+		
+		string kickMessage = format( "The server is considered full. Rejoin when players reach [%d/%d]", maxPlayersForPlaylist - 2, maxPlayersForPlaylist )
+		KickPlayerById( connectingPlayerUID, kickMessage )
+	}
+}
+
+void function GiveInitialTeamToPlayer( entity player )
 {
 	if( IsPlayerEliminated( player ) )
 	{
 		EliminatedPlayerData data = GetPlayerEliminatedData( player )
-		SetTeam( player, data.team ) //Give saved team. Cafe
+		SetTeam( player, data.team ) // Assign the player to their pre-death team.
 		
 		#if DEVELOPER
-		printw( "TEAMING - Player was eliminated, assigning old team", data.team )
+			printw( "TEAMING - Player was eliminated, assigning old team", data.team )
 		#endif
+
 		return
 	}
 	
 	int maxTeamSize = GetCurrentPlaylistVarInt( "max_team_size", 1 )
-	int numTeams = GetCurrentPlaylistVarInt( "max_players", 0 ) / GetCurrentPlaylistVarInt( "max_team_size", 1 )
+	maxTeamSize = maxTeamSize > 0 ? maxTeamSize : 1
+
+	int maxPlayers = GetCurrentPlaylistVarInt( "max_players", 1 )
+	maxPlayers = maxPlayers > 0 ? maxPlayers : 1
+
+	int numTeams = maxPlayers / maxTeamSize
 	
 	#if DEVELOPER
-	printw( "TEAMING - Team Size:", maxTeamSize, " - Num Teams: ", numTeams )
+		printw( "TEAMING - Team Size:", maxTeamSize, " - Num Teams: ", numTeams )
 	#endif
 	
 	for( int i = TEAM_IMC; i <= TEAM_IMC + numTeams; i++ )
@@ -1144,9 +1271,13 @@ void function OnCharacterClassChanged( EHI playerEHI, ItemFlavor flavor )
 		return
 
 	entity player = FromEHI( playerEHI )
-	if ( IsAlive( player ) ) {	
+	if ( IsAlive( player ) ) 
+	{	
 		CharacterSelect_AssignCharacter( player, flavor, false )
-		DecideRespawnPlayer( player )
+		if( Gamemode() == eGamemodes.SURVIVAL )
+			DecideRespawnPlayer( player, true )
+		else
+			DecideRespawnPlayer( player, false ) //(mk): Giving loadout related weapons here interferes with every custom gamemode in the codebase. Set to false. If your mode needs loadoutrelated weapons apply them.
 	}
 }
 
@@ -1175,74 +1306,99 @@ array<int> function GetTeamsForPlayersFlowstate( array<entity> playersToUse )
 
 void function UpdatePlayerCounts()
 {
-
-	//string currGameMode = GameRules_GetGameMode()
-	
 	int currGameMode = Gamemode()
 	
 	switch(currGameMode)
 	{
 		case eGamemodes.WINTEREXPRESS:
-		array<entity> playersAlive = GetPlayerArray_ConnectedNotSpectatorTeam()
-		SetGlobalNetInt( "livingPlayerCount", playersAlive.len() )
-		SetGlobalNetInt( "squadsRemainingCount", playersAlive.len() )		
-		break
-
-		case eGamemodes.fs_infected:
-		SetGlobalNetInt( "livingPlayerCount", GetPlayerArrayOfTeam_Alive(TEAM_IMC).len() )
-		SetGlobalNetInt( "livingShadowPlayerCount", GetPlayerArrayOfTeam_Alive(TEAM_MILITIA).len() )
-		SetGlobalNetInt( "squadsRemainingCount", 2 )
-		break
-		
-		case eGamemodes.fs_dm:
-		if( Playlist() == ePlaylists.fs_scenarios )
 		{
-			foreach( player in GetPlayerArray() )
-				Remote_CallFunction_NonReplay( player, "FS_Scenarios_ForceUpdatePlayerCount", player )
-		} else
+			array<entity> playersAlive = GetPlayerArray_ConnectedNotSpectatorTeam()
+			SetGlobalNetInt( "livingPlayerCount", playersAlive.len() )
+			SetGlobalNetInt( "squadsRemainingCount", playersAlive.len() )		
+			break
+		}
+		case eGamemodes.fs_infected:
+		{
+			SetGlobalNetInt( "livingPlayerCount", GetPlayerArrayOfTeam_Alive(TEAM_IMC).len() )
+			SetGlobalNetInt( "livingShadowPlayerCount", GetPlayerArrayOfTeam_Alive(TEAM_MILITIA).len() )
+			SetGlobalNetInt( "squadsRemainingCount", 2 )
+
+			break
+		}
+		case eGamemodes.fs_dm:
+		{
+			if( Playlist() == ePlaylists.fs_scenarios )
+			{
+				foreach( player in GetPlayerArray() )
+				{
+					Remote_CallFunction_NonReplay( player, "FS_Scenarios_ForceUpdatePlayerCount", player )
+				}
+			}
+			else
+			{
+				array<entity> connectedPlayers = GetPlayerArray_ConnectedNotSpectatorTeam()
+				SetGlobalNetInt( "livingPlayerCount", connectedPlayers.len() )
+				SetGlobalNetInt( "squadsRemainingCount", connectedPlayers.len() )
+			}
+			break
+		}
+		case eGamemodes.CUSTOM_CTF:
 		{
 			array<entity> connectedPlayers = GetPlayerArray_ConnectedNotSpectatorTeam()
 			SetGlobalNetInt( "livingPlayerCount", connectedPlayers.len() )
-			SetGlobalNetInt( "squadsRemainingCount", connectedPlayers.len() )
+			SetGlobalNetInt( "squadsRemainingCount", connectedPlayers.len() )		
+			break
 		}
+		case eGamemodes.fs_prophunt:
+		
+		array<entity> propsAlive = GetPlayerArrayOfTeam_Alive( TEAM_MILITIA )
+		SetGlobalNetInt( "livingPlayerCount", propsAlive.len() )
+		SetGlobalNetInt( "squadsRemainingCount", propsAlive.len() )		
 		break
 
-		case eGamemodes.CUSTOM_CTF:
-		array<entity> connectedPlayers = GetPlayerArray_ConnectedNotSpectatorTeam()
-		SetGlobalNetInt( "livingPlayerCount", connectedPlayers.len() )
-		SetGlobalNetInt( "squadsRemainingCount", connectedPlayers.len() )		
-		break
-		
 		case eGamemodes.fs_prophunt:
 		array<entity> propsAlive = GetPlayerArrayOfTeam_Alive( TEAM_MILITIA )
 		SetGlobalNetInt( "livingPlayerCount", propsAlive.len() )
 		SetGlobalNetInt( "squadsRemainingCount", propsAlive.len() )		
 		break
 
+		case eGamemodes.fs_spieslegends:
+		array<entity> connectedPlayers = GetPlayerArray()
+		SetGlobalNetInt( "livingPlayerCount", connectedPlayers.len() )
+		SetGlobalNetInt( "squadsRemainingCount", connectedPlayers.len() )		
+		break
+		
 		case eGamemodes.flowstate_pkknockback:
-		array<entity> playersAlive = GetPlayerArray_Alive()
-		SetGlobalNetInt( "livingPlayerCount", playersAlive.len() )
-		SetGlobalNetInt( "squadsRemainingCount", playersAlive.len() )		
-		break
-		
+		{
+			array<entity> playersAlive = GetPlayerArray_Alive()
+			SetGlobalNetInt( "livingPlayerCount", playersAlive.len() )
+			SetGlobalNetInt( "squadsRemainingCount", playersAlive.len() )		
+			break
+		}
 		case eGamemodes.fs_duckhunt:
-		array<entity> ducksAlive = GetPlayerArrayOfTeam_Alive( TEAM_MILITIA )
-		SetGlobalNetInt( "livingPlayerCount", ducksAlive.len() )
-		SetGlobalNetInt( "squadsRemainingCount", ducksAlive.len() )		
-		break
-		
+		{
+			array<entity> ducksAlive = GetPlayerArrayOfTeam_Alive( TEAM_MILITIA )
+			SetGlobalNetInt( "livingPlayerCount", ducksAlive.len() )
+			SetGlobalNetInt( "squadsRemainingCount", ducksAlive.len() )		
+			break
+		}
 		case eGamemodes.fs_snd:
-		foreach( player in GetPlayerArray() )
-			Remote_CallFunction_ByRef( player, "SND_ForceUpdatePlayerCount" )
-			//Remote_CallFunction_NonReplay( player, "SND_ForceUpdatePlayerCount")
-		break
-		
-		default:
-		SetGlobalNetInt( "livingPlayerCount", GetPlayerArray_AliveConnected().len() )
-		SetGlobalNetInt( "squadsRemainingCount", GetNumTeamsRemaining() )		
-		break
-	}
+		{
+			foreach( player in GetPlayerArray() )
+			{
+				Remote_CallFunction_ByRef( player, "SND_ForceUpdatePlayerCount" )
+				//Remote_CallFunction_NonReplay( player, "SND_ForceUpdatePlayerCount")
+			}
 
+			break
+		}
+		default:
+		{
+			SetGlobalNetInt( "livingPlayerCount", GetPlayerArray_AliveConnected().len() )
+			SetGlobalNetInt( "squadsRemainingCount", GetNumTeamsRemaining() )		
+			break
+		}
+	}
 }
 #endif
 
@@ -1352,21 +1508,39 @@ void function Flowstate_ApplyModifiedMovementToPlayer( entity player, bool reset
 
 	if( resetOnly )
 		return
+		
+	//(mk): Applying movement too closely on first spawn causes weird desync.
+	if( player.p.respawnCount == 0 )
+		thread __ApplyModifiedMovementDelayed_internal( player )
+	else 
+		__ApplyModifiedMovementDelayed_internal( player, false )
+}
+
+void function __ApplyModifiedMovementDelayed_internal( entity player, bool delayedAsThread = true )
+{
+	if( delayedAsThread )
+	{
+		if( !IsValid( player ) )
+			return
+			
+		player.EndSignal( "OnDeath", "OnDestroy" )
+		wait 1
+	}
 
 	switch( file.flowstate_modified_movement )
 	{
 		case eMovementType.TRUE_TF2_SETTINGS: //1
-		
+		{
 			player.SetMoveSpeedScale( 0.87 )		
 			SetPlayerSettings( player, TRUE_TF2_SETTINGS )
 			
 			#if DEVELOPER
 				printw( "Player movement changed to Titanfall 2 " + player )
 			#endif
-		break
-		
+			break
+		}
 		case eMovementType.TRUE_TF2_SETTINGS_HIGH_AIRACCEL: //2
-		
+		{
 			player.SetMoveSpeedScale( 0.87 )
 			player.DisableMantle()
 			SetPlayerSettings( player, TRUE_TF2_SETTINGS_HIGH_AIRACCEL )
@@ -1374,20 +1548,20 @@ void function Flowstate_ApplyModifiedMovementToPlayer( entity player, bool reset
 			#if DEVELOPER
 				printw( "Player movement changed to Titanfall 2 High Air Accel " + player )
 			#endif
-		break
-		
+			break
+		}
 		case eMovementType.TRUE_TF2_SETTINGS_LOW_GRAV: //3
-		
+		{
 			player.SetMoveSpeedScale( 0.87 )	
 			SetPlayerSettings( player, TRUE_TF2_SETTINGS_LOW_GRAV )
 			
 			#if DEVELOPER
 				printw( "Player movement changed to Titanfall 2 Low Gravity " + player )
 			#endif
-		break
-		
+			break
+		}
 		case eMovementType.CSGO_MOVEMENT: //4
-		
+		{
 			StatusEffect_AddEndless( player, eStatusEffect.move_slow, 0.1 )
 			player.SetMoveSpeedScale( 1.38854974986041364747 )
 			player.DisableMantle()
@@ -1397,10 +1571,10 @@ void function Flowstate_ApplyModifiedMovementToPlayer( entity player, bool reset
 			#if DEVELOPER
 				printw( "Player movement changed to CSGO " + player )
 			#endif
-		break
-		
+			break
+		}
 		case eMovementType.CSGO_MOVEMENT_HIGH_AIRACCEL: //5
-		
+		{
 			StatusEffect_AddEndless( player, eStatusEffect.move_slow, 0.1 )
 			player.SetMoveSpeedScale( 1.38854974986041364747 )
 			player.DisableMantle()
@@ -1410,19 +1584,19 @@ void function Flowstate_ApplyModifiedMovementToPlayer( entity player, bool reset
 			#if DEVELOPER
 				printw( "Player movement changed to CSGO High Air Accel " + player )
 			#endif
-		break
-		
+			break
+		}
 		case eMovementType.SURF_SETTINGS: //6
-		
+		{
 			SetPlayerSettings( player, SURF_SETTINGS )
 			
 			#if DEVELOPER
 				printw( "Player movement changed to (Apex) Surf " + player )
 			#endif
-		break
-
+			break
+		}
 		case eMovementType.HL1_MOVEMENT: //7
-				
+		{	
 			StatusEffect_AddEndless( player, eStatusEffect.move_slow, 0.1 )
 			player.SetMoveSpeedScale( 1.77840093365762835808 )
 			player.DisableMantle()	
@@ -1431,10 +1605,10 @@ void function Flowstate_ApplyModifiedMovementToPlayer( entity player, bool reset
 			#if DEVELOPER
 				printw( "Player movement changed to Half-Life 1 " + player )
 			#endif
-		break
-
+			break
+		}
 		case eMovementType.HALO_MOVEMENT: //8
-			
+		{
 			StatusEffect_AddEndless( player, eStatusEffect.move_slow, 0.1 )
 			player.SetMoveSpeedScale( 1.1 )
 			player.DisableMantle()
@@ -1443,39 +1617,38 @@ void function Flowstate_ApplyModifiedMovementToPlayer( entity player, bool reset
 			#if DEVELOPER
 				printw( "Player movement changed to Halo " + player )
 			#endif
-		break
-		
+			break
+		}
 		case eMovementType.SUPERGLIDE_BOOST_SETTINGS: //9
-		
+		{
 			SetPlayerSettings( player, SUPERGLIDE_BOOST_SETTINGS )
 			
 			#if DEVELOPER
 				printw( "Superglide modified for all players " + player )
 			#endif
-		break
-		
+			break
+		}
 		case eMovementType.INSTAGIB_PLAYER_SETTINGS: //10
-		
+		{
 			SetPlayerSettings( player, INSTAGIB_PLAYER_SETTINGS )
 			//Disable players collision
 			player.kv.contents = CONTENTS_BULLETCLIP | CONTENTS_MONSTERCLIP | CONTENTS_HITBOX | CONTENTS_BLOCKLOS | CONTENTS_PHYSICSCLIP; //CONTENTS_PLAYERCLIP
 			#if DEVELOPER
 				printw( "Player movement changed to Insta-Gib " + player )
 			#endif
-		break
-		
+			break
+		}
 		case eMovementType.HAVEFUN_PLAYER_SETTINGS: //11
-		
+		{
 			SetPlayerSettings( player, HAVEFUN_PLAYER_SETTINGS )
 			
 			#if DEVELOPER
 				printt( "Player movement changed to Have Fun Settings " + player )
 			#endif
-		break
-	
-
+			break
+		}
 		case eMovementType.HALO_MOVEMENT_NEW: //HALO BETTER
-
+		{
 			SetPlayerSettings( player, HALO_MOVEMENT_NEW )
 			player.SetMoveSpeedScale( 1.1 )
 			player.DisableMantle()
@@ -1483,8 +1656,8 @@ void function Flowstate_ApplyModifiedMovementToPlayer( entity player, bool reset
 			#if DEVELOPER
 				printw( "Player movement changed to Halo New " + player )
 			#endif
-		break
-		
+			break
+		}
 	}
 }
 #endif

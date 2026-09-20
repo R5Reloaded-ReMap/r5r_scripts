@@ -20,15 +20,18 @@ global function IsDoorLocked
 global function RemoveDoorFromManagedEntArray
 global function OpenDoor
 global function CloseDoor
+global function GetDoorType
+global function AddCallback_OnDoorInteraction
 #endif
 
 #if SERVER && DEVELOPER
 global function DEV_RestartAllDoorThinks
+global function DEV_GetCurrentDoor
 #endif
 
 global function CodeCallback_OnDoorInteraction
 
-enum eDoorType
+global enum eDoorType
 {
 	MODEL,
 	MOVER,
@@ -53,13 +56,18 @@ struct DoorData
 
 struct
 {
-	#if SERVER && DEVELOPER
+	#if SERVER
 		table<entity, int> allDoors
 	#endif
 	array<entity> bigPropDoors
 
 	#if SERVER
 		int propDoorArrayIndex
+		table< int, array< DoorData > > recreateDoorDataByRealm
+		table< entity, DoorData > rebuiltDoorToData
+		table< vector, vector > doorBaseAnglesByDoorLoc // base Angles referenced by location of door.
+		array<void functionref(entity,entity,vector,var)> callbacks_onCodeDoorBroken
+		array<void functionref(entity,entity,entity,bool)> onDoorInteractionCallbacks
 	#endif //SERVER
 
 	#if CLIENT
@@ -83,6 +91,9 @@ struct
 	float blockableDoorRegenStartDelay
 	float blockableDoorRegenDuration
 	
+	#if SERVER 
+		entity dev_currentDoor
+	#endif
 
 } file
 
@@ -129,7 +140,7 @@ void function ShDoors_Init()
 
 		#if DEVELOPER
 			RegisterSignal( "HaltDoorThink" )
-			AddClientCommandCallback( "dev_spawn_blockable_door", ClientCommand_dev_spawn_blockable_door )
+			AddClientCommandCallback( "dev_spawn_blockable_door", ClientCommand_dev_spawn_blockable_door ) // dev
 		#endif
 
 	#endif
@@ -157,7 +168,7 @@ bool function IsDoor( entity ent )
 		case "survival_door_sliding":
 		case "survival_door_blockable":
 		case "survival_door_code":
-		return true
+			return true
 	}
 
 	return false
@@ -174,7 +185,7 @@ bool function IsDoorOpen( entity door )
 	}
 	else
 	{
-		return GradeFlagsHas( door, eGradeFlags.IS_OPEN ) //
+		return GradeFlagsHas( door, eGradeFlags.IS_OPEN ) //door.GetCurrentSequenceName().find( "open" ) > 0
 	}
 
 	return false
@@ -214,7 +225,6 @@ bool function ClientCommand_dev_spawn_blockable_door( entity player, array<strin
 	door.SetOrigin( tr.endPos )
 	door.SetAngles( AnglesCompose( VectorToAngles( FlattenNormalizeVec( tr.endPos - player.GetOrigin() ) ), <0, -90, 0> ) )
 	DispatchSpawn( door )
-
 	return true
 }
 #endif
@@ -277,9 +287,9 @@ void function OnDoorSpawned( entity door )
 		door.Destroy()
 		return
 	}
-	
+
 	string scriptName = door.GetScriptName()
-	// printt( "Cafe. Big Door spawned!", scriptName, door.GetOrigin(), door.GetModelName() )
+
 	int doorType
 	switch( scriptName )
 	{
@@ -287,8 +297,8 @@ void function OnDoorSpawned( entity door )
 			// Special legacy case for a specific door model
 			// Faster to do these experiments in script than to keep changing models in leveled and recompiling
 			// TODO: Should eventually delete
-			bool useBlockableDoors = file.useBlockableDoors
-			bool useCodeDoors = file.useCodeDoors
+			bool useBlockableDoors = GetCurrentPlaylistVarBool( "survival_force_blockable_doors", true )
+			bool useCodeDoors = GetCurrentPlaylistVarBool( "survival_force_code_doors", true )
 			if ( useCodeDoors )
 			{
 				bool makeLeftDoor  = false, makeRightDoor = false
@@ -313,6 +323,7 @@ void function OnDoorSpawned( entity door )
 
 					case "mdl/door/door_104x64x8_generic_both_animated.rmdl":
 						// elevator-style double
+
 					case "mdl/door/door_108x60x4_generic_both_animated.rmdl":
 						// brown-style double
 						makeLeftDoor = true
@@ -433,7 +444,7 @@ void function OnDoorSpawned( entity door )
 			}
 			else
 			{
-				if ( file.forceSlidingDoors )
+				if ( GetCurrentPlaylistVarBool( "survival_force_sliding_doors", false ) )
 				{
 					entity ent
 					if ( door.GetModelName() == "mdl/door/door_108x60x4_generic_right_animated.rmdl" )
@@ -496,9 +507,10 @@ void function OnDoorSpawned( entity door )
 
 		case "survival_door_plain":
 			// increase use radius for large doors
-			door.AddUsableValue( USABLE_USE_DISTANCE_OVERRIDE | USABLE_HORIZONTAL_FOV )
+			door.AddUsableValue( USABLE_USE_DISTANCE_OVERRIDE )
 			door.SetUsableDistanceOverride( 150 ) // no point going higher without increasing context_use_entity_search_range
 			doorType = eDoorType.PLAIN
+			ToggleNPCPathsForEntity( door, false )
 			break
 
 		case "survival_door_sliding":
@@ -553,6 +565,16 @@ void function OnDoorSpawned( entity door )
 	ArrayRemoveInvalid( file.bigPropDoors )
 	file.bigPropDoors.append( door )
 }
+
+int function GetDoorType( entity door )
+{
+	if ( door in file.allDoors )
+		return file.allDoors[door]
+	else if ( IsCodeDoor( door ) )
+		return eDoorType.CODE
+
+	return eDoorType.UNKNOWN
+}
 #endif
 
 array<entity> function GetAllPropDoors_BigOnes()
@@ -561,6 +583,11 @@ array<entity> function GetAllPropDoors_BigOnes()
 }
 
 #if SERVER && DEVELOPER
+entity function DEV_GetCurrentDoor()
+{
+	return file.dev_currentDoor
+}
+
 void function DEV_RestartAllDoorThinks()
 {
 	foreach( entity door, int doorType in file.allDoors )
@@ -865,25 +892,36 @@ void function SurvivalDoorThink( entity door, int doorType )
 
 	while ( 1 )
 	{
-		entity player = expect entity( door.WaitSignal( "OnPlayerUse" ).player )
+		table result         = WaitSignal( door, "OnPlayerUse", "ForceToggleScriptedDoor" )
+		entity player        = expect entity( result.player )
+		string signalMessage = expect string( result.signal )
 
-			if ( !IsValid( player ) || !player.IsPlayer() ) // (dw): R5DEV-69114
+		if ( IsValid( player ) )
+		{
+			if ( IsScriptDoorLocked( door ) || !player.IsPlayer() )
 				continue
+		}
+		else if ( signalMessage != "ForceToggleScriptedDoor" )
+		{
+			continue
+		}
 
 		//Tell players with tracking vision that a pilot has recently distrubed the door.
 		#if MP
-			TrackingVision_CreatePOI( eTrackingVisionNetworkedPOITypes.DOOR_USE, door, doorIconOrigin, player.GetTeam(), player )
+			if ( IsValid( player ) )
+				TrackingVision_CreatePOI( eTrackingVisionNetworkedPOITypes.DOOR_USE, door, doorIconOrigin, player.GetTeam(), player )
 		#endif
 
 		door.Signal( "DoorOperating" )
 
-		foreach( entity linkedDoor in door.GetLinkEntArray() )
-			Signal( linkedDoor, "OnPlayerUse", { player = player } ) // todo(dw): this is hacky
+		foreach ( entity linkedDoor in door.GetLinkEntArray() )
+			ToggleDoor( linkedDoor, player ) // todo(dw): this is hacky
 
-		door.SetUsePrompts( "", "" )
+		if ( !IsScriptDoorLocked( door ) )
+			door.SetUsePrompts( "", "" )
 
 		if ( door.e.isOpen )
-		{
+		{			
 			EmitSoundOnEntity( door, "Door_Sliding_Metal_Close" )
 			door.e.isOpen = false
 			GradeFlagsClear( door, eGradeFlags.IS_OPEN )
@@ -897,6 +935,8 @@ void function SurvivalDoorThink( entity door, int doorType )
 			{
 				door.Anim_SetSafePushMode( true )
 				waitthread PlayAnimWithTimeout( door, "close", 1.3 )
+
+				ToggleNPCPathsForEntity( door, false )
 			}
 
 			if ( doorType == eDoorType.MODEL )
@@ -916,18 +956,20 @@ void function SurvivalDoorThink( entity door, int doorType )
 			GradeFlagsSet( door, eGradeFlags.IS_OPEN )
 			vector doorVec = AnglesToForward( defaultAngles )
 
-			HeatMapStat( player, "DoorOpened", door.GetOrigin() )
+			if ( IsValid( player ) )
+				HeatMapStat( player, "DoorOpened", door.GetOrigin() )
 
 			if ( IsValid( player ) )
 				PIN_Interact( player, "door_open" )
 
 			if ( doorType == eDoorType.PLAIN )
 			{
+				door.Anim_SetSafePushMode( false )
+
 				float oldCycle = door.GetCycle()
 				if ( oldCycle < 1.0 )
 				{
 					door.Anim_ChangePlaybackRate( 0.0 )
-					door.Anim_SetSafePushMode( false )
 					wait 0.1
 				}
 				PlayAnimNoWait( door, "open" )
@@ -939,26 +981,40 @@ void function SurvivalDoorThink( entity door, int doorType )
 					door.SetCycle( 1.0 - oldCycle )
 
 				WaittillAnimDone( door )
+
+				ToggleNPCPathsForEntity( door, true )
 			}
 			else if ( doorType == eDoorType.MODEL )
 			{
-				float dot = DotProduct( door.GetOrigin() - player.GetOrigin(), doorVec )
-				lastOpenDirection = dot > 0 ? "out" : "in"
+				if ( IsValid( player ) )
+				{
+					float dot = DotProduct( door.GetOrigin() - player.GetOrigin(), doorVec )
+					lastOpenDirection = dot > 0 ? "out" : "in"
+				}
+				else if ( lastOpenDirection == "" )
+				{
+					lastOpenDirection = "out"
+				}
 				waitthread PlayAnim( door, "open_" + lastOpenDirection )
 			}
 			else if ( doorType == eDoorType.MOVER )
 			{
-				vector A   = door.GetOrigin() + doorVec
-				vector B   = door.GetOrigin()
-				vector pos = player.GetOrigin()
+				float dir = 1.0
 
-				A = <A.x, A.y, 0>
-				B = <B.x, B.y, 0>
-				pos = <pos.x, pos.y, 0>
+				if ( IsValid( player ) )
+				{
+					vector A   = door.GetOrigin() + doorVec
+					vector B   = door.GetOrigin()
+					vector pos = player.GetOrigin()
 
-				float dot = DotProduct( A - B, Normalize( pos - B ) )
+					A = <A.x, A.y, 0>
+					B = <B.x, B.y, 0>
+					pos = <pos.x, pos.y, 0>
 
-				float dir = dot > 0 ? 1.0 : -1.0
+					float dot = DotProduct( A - B, Normalize( pos - B ) )
+
+					dir = dot > 0 ? 1.0 : -1.0
+				}
 
 				vector newAngles = AnglesCompose( defaultAngles, <  0, 90 * dir, 0 > )
 				door.NonPhysicsRotateTo( newAngles, moveTime, 0, 0 )
@@ -1148,19 +1204,36 @@ vector function GetBlockableDoorDesiredAngles( entity door, int goalNotch )
 
 
 #if SERVER
+const bool DEBUG_DOORS = false
 void function OnCodeDoorSpawned( entity door )
 {
+	#if DEVELOPER && DEBUG_DOORS
+		printt
+		( 
+			"DOORDBG:",
+			"ent=", door,
+			"class=", door.GetClassName(),
+			"netclass=", door.GetNetworkedClassName(),
+			"scriptname=", door.GetScriptName(),
+			"targetname=", door.GetTargetName(),
+			"model=", string( door.GetModelName() ),
+			"origin=", door.GetOrigin()
+		)
+	#endif 
+
 	if( isScenariosMode() && door.GetScriptName() != "flowstate_door_realms" )
 	{
 		AddToScriptManagedEntArray( file.propDoorArrayIndex, door )
 		return
 	}
+	
 	door.SetMaxHealth( file.blockableDoorHealth )
 	door.SetHealth( door.GetMaxHealth() )
 	door.SetTakeDamageType( DAMAGE_YES )
 	door.SetDamageNotifications( true )
 	
 	door.EnableAttackableByAI( AI_PRIORITY_NO_THREAT, 0, AI_AP_FLAG_NONE ) 
+	door.SetIsValidAIMeleeTarget( true )
 	door.SetTouchTriggers( true )
 	
 	AddEntityCallback_OnPostDamaged( door, BlockableDoor_OnDamage )
@@ -1175,24 +1248,30 @@ void function OnCodeDoorSpawned( entity door )
 void function OnCodeDoorUsed( entity door, entity player, int useInputFlags )
 {
 	#if MP
-	TrackingVision_CreatePOI( eTrackingVisionNetworkedPOITypes.DOOR_USE, door, door.GetWorldSpaceCenter(), player.GetTeam(), player )
+		TrackingVision_CreatePOI( eTrackingVisionNetworkedPOITypes.DOOR_USE, door, door.GetWorldSpaceCenter(), player.GetTeam(), player )
 	#endif
 }
 
 void function BlockableDoorThink( entity door )
 {
 	door.EndSignal( "OnDestroy" )
+	
 	#if DEVELOPER
 		door.EndSignal( "HaltDoorThink" )
 	#endif
-	OnThreadEnd( function() : ( door ) {
-		if ( IsValid( door ) )
+	
+	OnThreadEnd
+	( 	
+		void function() : ( door ) 
 		{
-			door.SetAngles( door.e.spawnAngles )
-			RemoveEntityCallback_OnPostDamaged( door, BlockableDoor_OnDamage )
-			ClearCallback_CanUseEntityCallback( door )
-		}
-	} )
+			if ( IsValid( door ) )
+			{
+				door.SetAngles( door.e.spawnAngles )
+				RemoveEntityCallback_OnPostDamaged( door, BlockableDoor_OnDamage )
+				ClearCallback_CanUseEntityCallback( door )
+			}
+		} 
+	)
 
 	door.SetPusher( true )
 
@@ -1205,6 +1284,8 @@ void function BlockableDoorThink( entity door )
 	//door.SetUsableFOVByDegrees( 90.0 )
 	AddEntityCallback_OnPostDamaged( door, BlockableDoor_OnDamage )
 	SetObjectCanBeMeleed( door, true )
+	door.EnableAttackableByAI( AI_PRIORITY_NO_THREAT, 0, AI_AP_FLAG_NONE ) 
+	door.SetIsValidAIMeleeTarget( true )
 	SetVisibleEntitiesInConeQueriableEnabled( door, true )
 
 	door.AllowMantle()
@@ -1681,9 +1762,12 @@ void function BlockableDoor_OnDamage( entity door, var damageInfo )
 	float damageInflicted = DamageInfo_GetDamage( damageInfo )
 	//entity weapon      = DamageInfo_GetWeapon( damageInfo ) // This returns null for melee. See R5DEV-28611.
 	entity weapon         = null
-	if ( IsValid( attacker ) && attacker.IsPlayer() )
-		weapon = attacker.GetActiveWeapon( eActiveInventorySlot.mainHand )
-
+	if ( IsValid( attacker ) )
+	{
+		if( attacker.IsPlayer() || ( attacker.IsNPC() && attacker.GetClassName() == "npc_dummie" ) )	
+			weapon = attacker.GetActiveWeapon( eActiveInventorySlot.mainHand )
+	}
+		
 	if ( file.blockableDoorHurtBySpecialKick && IsValid( weapon ) && weapon.HasMod( "proto_door_kick" ) )
 	{
 		int guaranteedKickCount = file.blockableDoorGuaranteedKickKillCount
@@ -2252,15 +2336,31 @@ void function CodeCallback_OnDoorInteraction( entity door, entity user, entity o
 	{
 		string actionName = opening ? "door_open" : "door_close"
 		PIN_Interact( user, actionName )
+		
+		foreach( callbackFunc in file.onDoorInteractionCallbacks )
+			callbackFunc( door, user, oppositeDoor, opening )
+		
+		#if DEVELOPER 
+			if( user.IsPlayer() )
+				file.dev_currentDoor = door
+		#endif 
 	}
 	#endif
+}
+
+#if SERVER
+
+void function AddCallback_OnDoorInteraction( void functionref( entity, entity, entity, bool ) callbackFunc )
+{
+	mAssert( !file.onDoorInteractionCallbacks.contains( callbackFunc ), "Tried to add callback %s with %s but it was already added", string( callbackFunc ), FUNC_NAME() )
+	file.onDoorInteractionCallbacks.append( callbackFunc )
 }
 
 void function OpenDoor( entity door, entity player )
 {
 	if ( IsCodeDoor( door ) )
 	{
-		//door.OpenDoor( null )
+		door.OpenDoor( null )
 		return
 	}
 
@@ -2277,7 +2377,7 @@ void function CloseDoor( entity door, entity player )
 	if ( IsCodeDoor( door ) )
 	{
 		//printf( "Is Code Door: true" )
-		//door.CloseDoor( null )
+		door.CloseDoor( null )
 		return
 	}
 
@@ -2317,6 +2417,24 @@ void function OpenAndLockAllScriptDoors()
 		door.UnsetUsable() //interferes with reload prompt
 	}*/
 }
+
+entity function GetClosestScriptDoorToPos( vector pos, float maxDist = 256 )
+{
+	return GetClosest( GetAllNonCodeDoorEnts(), pos, maxDist )
+}
+
+
+entity function GetClosestCodeDoorToPos( vector pos, float maxDist = 256 )
+{
+	return GetClosest( GetAllCodeDoorEnts(), pos, maxDist )
+}
+
+void function AddCallback_OnCodeDoorBroken( void functionref(entity,entity,vector,var) func )
+{
+	Assert( file.callbacks_onCodeDoorBroken.contains( func ) == false, "Callback (" + string( func ) + ") already registered for onCodeDoorBroken" )
+	file.callbacks_onCodeDoorBroken.append( func )
+}
+#endif //SERVER
 bool function IsDoorLocked( entity door )
 {
 	if ( IsCodeDoor( door ) )

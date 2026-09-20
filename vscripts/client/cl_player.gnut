@@ -58,6 +58,8 @@ global function PlayerSetting_DamageClosesMenu
 global function UpdatePlayerIsMuted //for future usage
 global function RunMuteClears
 
+global function AddCallback_OnPlayerConnected
+
 #if ENTITYVAR_DEPRECATED
 	global function OnVarChangedCallback_PlayerMovement
 #endif
@@ -93,6 +95,7 @@ struct
 	table<entity, entity> healthBars
 	table<entity, float> onPlayerDamagedTimes	
 	table< string, MuteData > mutedPlayers
+	array< void functionref( entity ) > onPlayerConnectedCallbacks
 	
 } file
 
@@ -142,7 +145,7 @@ void function ClPlayer_Init()
 	level.grenadeIndicatorEnabled <- true
 	level.clientsLastKiller <- null
 
-	if( GetCurrentPlaylistVarBool( "flowstate_enable_health_bars", false ) ) //By Cafe
+	if( GetCurrentPlaylistVarBool( "flowstate_enable_health_bars", false ) && !GetCurrentPlaylistVarBool( "is_practice_map", false ) )
 	{
 		AddCreateCallback( "player", FS_HealthBars_StartForPlayer )
 		AddDestroyCallback( "player", FS_HealthBars_Destroy )
@@ -177,6 +180,12 @@ void function ClPlayer_Init()
 	AddCallback_OnPlayerDisconnected( RunMuteClears )
 }
 
+void function AddCallback_OnPlayerConnected( void functionref( entity ) callbackFunc )
+{
+	mAssert( !file.onPlayerConnectedCallbacks.contains( callbackFunc ), "Tried to add callback func %s with %s() but it already exists", string( callbackFunc ), FUNC_NAME() )
+	file.onPlayerConnectedCallbacks.append( callbackFunc )
+}
+
 void function FS_HealthBars_StartForPlayer( entity player )
 {
 	if( player == GetLocalClientPlayer() || GetConVarInt( "enable_healthbar" ) == 0 )
@@ -193,7 +202,6 @@ void function FS_HealthBars_StartForPlayer( entity player )
 	Flowstate_CreateCustomHealthBarForPlayer( player )
 }
 
-// cool health bars. Made by Cafe
 void function Flowstate_CreateCustomHealthBarForPlayer( entity player ) 
 {
 	entity vgui
@@ -233,14 +241,14 @@ bool function DoesHealthBarExist( entity player )
 
 void function Flowstate_CustomHealthBar_UpdateBarAngles( entity player, entity vgui )
 {
-	EndSignal( player, "OnDestroy", "StopShowingHealthbars" )
+	EndSignal( player, "OnDestroy", "StopShowingHealthbars", "OnDisconnected" )
 
-	while( true )
+	for( ; ; )
 	{
 		WaitFrame()
 
-		if( !IsValid( player ) )
-			break
+		// if( !IsValid( player ) ) //(mk): This check is burning cycles for no reason, EndSignal will end this thread before player is invalid.
+			// break
 		
 		if( !IsValid( vgui ) )
 		{
@@ -257,7 +265,7 @@ void function Flowstate_CustomHealthBar_UpdateBarAngles( entity player, entity v
 		vector closestPoint = GetClosestPointOnLine( GetLocalViewPlayer().CameraPosition(), GetLocalViewPlayer().CameraPosition() + (AnglesToRight( GetLocalViewPlayer().CameraAngles() ) * 100.0), vgui.GetOrigin() )		
 		vector angles = VectorToAngles( vgui.GetOrigin() - closestPoint )
 		vgui.SetAngles( Vector( -90, angles.y, 0 ) )
-		vgui.SetOrigin( player.GetOrigin() + AnglesToUp( player.GetAngles() ) * 80 + AnglesToRight( GetLocalViewPlayer().CameraAngles() ) * 20 )
+		vgui.SetOrigin( ClampToWorldspace( player.GetOrigin() + AnglesToUp( player.GetAngles() ) * 80 + AnglesToRight( GetLocalViewPlayer().CameraAngles() ) * 20 ) )
 	}
 }
 
@@ -446,16 +454,19 @@ void function OnSettingsUpdated()
 	int iCheckPlayerDamageCloseSetting = GetConVarInt( "player_setting_damage_closes_deathbox_menu" )
 	int iCheckShowHealthbarsSetting = GetConVarInt( "enable_healthbar" )
 	
-	if( iCheckPlayerDamageCloseSetting > 1 || iCheckShowHealthbarsSetting > 1 )
-		return
-	
 	if( iCheckPlayerDamageCloseSetting != file.player_setting_damage_closes_deathbox_menu  )
 	{
+		if( iCheckPlayerDamageCloseSetting > 1 )
+			return 
+			
 		file.player_setting_damage_closes_deathbox_menu = iCheckPlayerDamageCloseSetting
 	}
 	
 	if( iCheckShowHealthbarsSetting != file.enable_healthbar )
 	{	
+		if( iCheckShowHealthbarsSetting > 1 )
+			return 
+			
 		file.enable_healthbar = iCheckShowHealthbarsSetting
 		
 		if( IsLobby() || !file.bDoesPlaylistAllowHealthbars )
@@ -841,6 +852,9 @@ void function PlayerConnectedOrDisconnected( entity player, int state, string di
 
 			Obituary_Print_Localized( Localize( "#MP_PLAYER_CONNECTED", playerName ), playerNameColor )
 		// }
+		
+		foreach( callbackFunc in file.onPlayerConnectedCallbacks )
+			callbackFunc( player )
 	}
 }
 
@@ -1005,7 +1019,7 @@ void function ClientCodeCallback_PlayerDidDamage( PlayerDidDamageParams params )
 
 	BloodSprayDecals( attacker, victim, damagePosition, damageAmount, isHeadShot, isKillShot, isMelee, isExplosion, isBullet, isShotgun )
 
-	if ( isShieldBreak )
+	if ( isShieldBreak && victim.IsPlayer() )
 		PlayShieldBreakEffect( victim )
 
 	int hitType = eHitType.NORMAL
@@ -1143,7 +1157,7 @@ void function KillShotBloodSpray( entity player, entity victim, vector damagePos
 void function BloodSprayDecals( entity player, entity victim, vector damagePosition, float damageAmount, bool isHeadShot, bool isKillShot, bool isMelee, bool isExplosion, bool isBullet, bool isShotgun )
 {
 	//if ( GameRules_GetGameMode() == "fs_prophunt" || GetCurrentPlaylistName() == "fs_lgduels_1v1" )
-	if( Playlist() == ePlaylists.fs_lgduels_1v1 || Gamemode() == eGamemodes.fs_prophunt )
+	if( Playlist() == ePlaylists.fs_1v1 || Playlist() == ePlaylists.fs_lgduels_1v1 || Gamemode() == eGamemodes.fs_prophunt )
 		return
 
 	if ( IsSoftenedLocale() || !Flag( "EnableBloodSprayDecals" ) )
@@ -2335,7 +2349,6 @@ void function FS_Toggle_Mute( bool toggle )
 		return
 		
 	string uid = player.GetPlatformUID()
-	// string cmd = "FS_TT " + chal.tostring()
 	
 	UpdatePlayerIsMuted( uid, toggle )
 	
@@ -2355,9 +2368,6 @@ void function FS_Toggle_Mute( bool toggle )
 		mute( false )
 		UpdateChatHUDVisibility()
 	}	
-	
-	// if( chal != 0 )
-		// player.ClientCommand( cmd )
 }
 
 //Nothing more than needed ( 4 funcs ). Struct is for future usage when the mute is by a player.
@@ -2415,7 +2425,7 @@ void function UpdatePlayerIsMuted( string uid, bool isMuted, bool byServer = tru
 		__UpdateMuteData( uid, isMuted, byServer, byClient )
 }
 
-void function FS_Silence( bool toggle, int eHandle )
+void function FS_Silence( bool toggle, int eHandle ) //(mk): deprecated, will be removed soon.
 {
 	entity player = GetEntityFromEncodedEHandle( eHandle )
 	if( !IsValid( player ) )
@@ -2443,7 +2453,7 @@ void function FS_RegisterAdmin()
 	if( !IsValid( player ) || !player.IsPlayer() )
 		return 
 	
-	RunUIScript( "UICallback_AdminStatus", Gamemode() == eGamemodes.WINTEREXPRESS ? false : player.GetPlayerNetBool("IsAdmin") )	
+	RunUIScript( "UICallback_AdminStatus", Gamemode() == eGamemodes.WINTEREXPRESS ? false : player.GetPlayerNetBool( "IsAdmin" ) )	
 }
 
 #if ENTITYVAR_DEPRECATED

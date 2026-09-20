@@ -68,6 +68,10 @@ global function PingFlavor_GetDrawHeightLine
 global function PingFlavor_GetColor
 #endif
 
+#if SERVER 
+global function Ping_SetCanPingCallback
+#endif 
+
 global enum ePingType
 {
 	LOCATION,
@@ -247,7 +251,7 @@ struct
 
 	int   specificPingCount
 	float nextSpecificPingTime
-	table< string,float > lastPingBlockingFunctionTriggerTime
+	table< string,float > lastPingBlockingFunctionTriggerTime	
 } file
 #endif
 
@@ -255,6 +259,8 @@ struct
 struct
 {
 	table< entity, table<int, float> >    nextPingTypeTimes
+	bool functionref( entity ) canPingFuncCallback = null
+	int myint
 
 } file
 #endif
@@ -340,12 +346,15 @@ string function Ping_GetSoundForItemPing( int pingType, bool isOurs )
 
 void function ShPing_Init()
 {
-	AddCallback_RegisterRootItemFlavors( void function() {
-		foreach( var block in IterateSettingsAssetArray( $"settings/itemflavlist/pings.rpak", "list" ) )
+	AddCallback_RegisterRootItemFlavors
+	( 
+		void function() 
 		{
-			ItemFlavor ornull pingOrNull = RegisterItemFlavorFromSettingsAsset( GetSettingsBlockAsset( block, "flavor" ) )
-		}
-	} )
+			foreach( var block in IterateSettingsAssetArray( $"settings/itemflavlist/pings.rpak", "list" ) )
+				ItemFlavor ornull pingOrNull = RegisterItemFlavorFromSettingsAsset( GetSettingsBlockAsset( block, "flavor" ) )
+		} 
+	)
+	
 	#if CLIENT
 		RegisterSignal( "UpdatePingBlockingHintAfterDelay" )
 
@@ -361,13 +370,16 @@ void function ShPing_Init()
 		AddCallback_OnCommsMenuStateChanged( OnCommsMenuChanged )
 		AddCallback_OnPlayerLifeStateChanged( OnLifeStateChanged )
 	#elseif SERVER
+		if( file.canPingFuncCallback == null )
+			file.canPingFuncCallback = NULL_CAN_PING_CALLBACK
+			
 		AddCallback_OnPlayerMatchStateChanged( OnPlayerMatchStateChanged )
 		AddCallback_OnClientConnected( OnPlayerConnected )
 
-		AddClientCommandCallbackNew( CMDNAME_PING_MAP_WAYPOINT, ClientCommand_PingMapWaypoint )
-		AddClientCommandCallbackNew( CMDNAME_PING_NEW_LOOT, ClientCommand_PingNewLoot )
-		AddClientCommandCallbackNew( CMDNAME_PING_REPLY, ClientCommand_PingReply )
-		AddClientCommandCallbackNew( CMDNAME_CANCEL_PING_BY_TICKETID, ClientCommand_CancelPingByTicketID )
+		AddClientCommandCallbackVoid( CMDNAME_PING_MAP_WAYPOINT, ClientCommand_PingMapWaypoint )
+		AddClientCommandCallbackVoid( CMDNAME_PING_NEW_LOOT, ClientCommand_PingNewLoot )
+		AddClientCommandCallbackVoid( CMDNAME_PING_REPLY, ClientCommand_PingReply )
+		AddClientCommandCallbackVoid( CMDNAME_CANCEL_PING_BY_TICKETID, ClientCommand_CancelPingByTicketID )
 	#endif
 
 	#if CLIENT
@@ -399,6 +411,10 @@ void function OnPlayerConnected( entity player )
 	}
 }
 
+void function Ping_SetCanPingCallback( bool functionref( entity ) callbackFunc )
+{
+	file.canPingFuncCallback = callbackFunc
+}
 #endif // SERVER
 
 #if(CLIENT)
@@ -462,17 +478,19 @@ void function CodeCallback_PingCommandQueueTrace( entity player )
 	}
 }
 
+bool function NULL_CAN_PING_CALLBACK( entity _ )
+{
+	return true
+}
+
 void function CodeCallback_PingCommandExecuteQueued( entity player, int pingType, int userTicketId )
 {
 	if ( !player.p.pingQueuedTraceIsValid )
 		return
 
-	if( Playlist() == ePlaylists.fs_scenarios ) //TODO: set state for allowed ping in gamemode logic
-	{
-		if( !FS_Scenarios_PlayerCanPing( player ) )
-			return
-	}
-
+	if( !file.canPingFuncCallback( player ) )
+		return
+		
 	CreateWaypoint_Ping_Location( player, pingType, player.p.pingQueuedTraceEnt, player.p.pingQueuedTraceOrigin, userTicketId, false )
 	player.p.pingQueuedTraceIsValid = false
 }
@@ -944,8 +962,6 @@ bool function PingIsAllowed( entity player )
 	if ( GetGameState() >= eGameState.WinnerDetermined )
 		return false
 	if ( GetGameState() == eGameState.PickLoadout )
-		return false
-	if ( GetGameState() == eGameState.WaitingForPlayers && !GetCurrentPlaylistVarBool( "survival_staging_area_enabled", false ) )
 		return false
 	if ( player.GetPlayerNetBool( "pingEnabled" ) == false )
 		return false
@@ -3234,15 +3250,18 @@ bool function CanPlayerPingDebounce( entity player, int pingType )
 	// If you try to spam it, it will block future pings until you pause for 0.3.
 	// forcing you to wait longer feels like it stopped working.
 
+	if( !file.canPingFuncCallback( player ) )
+		return false
+
 	float lastPingTime = file.nextPingTypeTimes[player][pingType]
 
 	if ( Time() - lastPingTime < 0.5 )
 	{
-		file.nextPingTypeTimes[player][pingType] = Time() - 0.2;
+		file.nextPingTypeTimes[player][pingType] = Time() - 0.2
 		return false
 	}
 
-	file.nextPingTypeTimes[player][pingType] = Time();
+	file.nextPingTypeTimes[player][pingType] = Time()
 	return true
 }
 
@@ -3283,7 +3302,7 @@ void function ClientCommand_PingNewLoot( entity player, array<string> args )
 		return
 	}
 
-	if( !CanPlayerPingDebounce( player, ePingType.LOOT ) ) //Cafe was here
+	if( !CanPlayerPingDebounce( player, ePingType.LOOT ) )
 		return
 
 	#if DEVELOPER

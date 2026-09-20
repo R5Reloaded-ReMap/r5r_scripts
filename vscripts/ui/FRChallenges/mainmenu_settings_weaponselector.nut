@@ -18,8 +18,6 @@ struct
 
 void function OpenFRChallengesSettingsWpnSelector()
 {
-	Hud_SetText( Hud_GetChild( file.menu, "Title" ), Gamemode() == eGamemodes.WINTEREXPRESS ? "" : "FLOWSTATE AIM TRAINER" )
-	Hud_SetText( Hud_GetChild( file.menu, "MadeBy" ), Gamemode() == eGamemodes.WINTEREXPRESS ? "R5R Winter Express implemented by @CafeFPS %$rui/flowstate_custom/colombia_flag_papa%" : "v1.31 | %$rui/flowstate_custom/colombia_flag_papa% Made in Colombia by @CafeFPS" )
 	EmitUISound( "UI_InGame_Inventory_Open" )
 	AdvanceMenu( file.menu )
 	TabData tabData = GetTabDataForPanel( file.menu )
@@ -30,6 +28,9 @@ void function OpenFRChallengesSettingsWpnSelector()
 	Hud_SetSelected( Hud_GetChild( file.menu, "SelectSecondaryWeapon"), false )
 	RunClientScript("SetWeaponSlot", 1)	
 	SetWeaponSwitcherVisible( true )
+	
+	bool resetButtonVisible = Playlist() != ePlaylists.fs_aimtrainer
+	Hud_SetVisible( Hud_GetChild( file.menu, "ResetSelectedWeapons"), resetButtonVisible )
 }
 
 void function CloseFRChallengesSettingsWpnSelector()
@@ -72,6 +73,7 @@ void function InitFRChallengesSettingsWpnSelector( var newMenuArg )
 	
 	AddButtonEventHandler( Hud_GetChild( file.menu, "SelectPrimaryWeapon"), UIE_CLICK, SelectPrimaryWeaponFunct )
 	AddButtonEventHandler( Hud_GetChild( file.menu, "SelectSecondaryWeapon"), UIE_CLICK, SelectSecondaryWeaponFunctFunct )
+	AddButtonEventHandler( Hud_GetChild( file.menu, "ResetSelectedWeapons"), UIE_CLICK, ResetSelectedWeaponsFunc )
 	
 	Hud_SetSelected( Hud_GetChild( file.menu, "SelectPrimaryWeapon"), true )
 }
@@ -104,6 +106,11 @@ void function SelectSecondaryWeaponFunctFunct(var button)
 	Hud_SetSelected( Hud_GetChild( file.menu, "SelectPrimaryWeapon"), false )
 	Hud_SetSelected( Hud_GetChild( file.menu, "SelectSecondaryWeapon"), true )
 	RunClientScript("SetWeaponSlot", 2)
+}
+
+void function ResetSelectedWeaponsFunc( var button )
+{
+	ClientCommand( "resetguns" )
 }
 
 void function GoBackButtonFunct(var button)
@@ -214,6 +221,9 @@ string function GetWeaponNameForUI(string weapon)
         case "mp_weapon_doubletake":
             weaponname = "Triple Take"
             break
+		case "mp_weapon_sentinel":
+            weaponname = "Sentinel"
+            break
         case "mp_weapon_defender":
             weaponname = "Charge Rifle"
             break
@@ -222,9 +232,6 @@ string function GetWeaponNameForUI(string weapon)
 			break
 		case "mp_weapon_volt_smg":
 			weaponname = "Volt"
-			break
-		case "mp_weapon_car":
-			weaponname = "Car"
 			break
 		case "mp_weapon_lightninggun":
 			weaponname = "Hitscan"

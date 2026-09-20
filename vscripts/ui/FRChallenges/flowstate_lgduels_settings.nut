@@ -54,7 +54,7 @@ void function InitLGDuelsSettings( var newMenuArg )
 
 void function SupportTheDev(var button)
 {
-	LaunchExternalWebBrowser( "https://www.patreon.com/c/r5_CafeFPS", WEBBROWSER_FLAG_NONE )
+	LaunchExternalWebBrowser( "https://ko-fi.com/r5r_colombia", WEBBROWSER_FLAG_NONE )
 }
 
 void function BeamToModifyChanged_Local( var button )
@@ -136,7 +136,9 @@ void function OnR5RSB_Open()
 
 void function OnR5RSB_Close()
 {
-	RunClientScript( "LGDuels_SaveToServerPersistence" )
+	//RunClientScript( "LGDuels_SaveToServerPersistence" ) //deprecated
+	RunClientScript( "LGDuels_UpdateSettings" )
+
 	CloseLGDuelsSettings()
 }
 
@@ -145,8 +147,8 @@ void function OnR5RSB_NavigateBack()
 	CloseLGDuelsSettings()
 }
 
-void function LoadLgDuelSettings( float s1, int s2, int s3, int s4, float s5, int s6, int s7, int s8  )
+void function LoadLgDuelSettings( float s1, int s2, int s3, int s4, float s5, int s6, int s7, int s8  ) //deprecated
 {	//TODO: Deprecate
 	//printt("Running LGDuels_SetFromPersistence with : ", s1, s2, s3, s4)
-	RunClientScript( "LGDuels_SetFromPersistence", s1, s2, s3, s4, s5, s6, s7, s8 )
+	//RunClientScript( "LGDuels_SetFromPersistence", s1, s2, s3, s4, s5, s6, s7, s8 )
 }

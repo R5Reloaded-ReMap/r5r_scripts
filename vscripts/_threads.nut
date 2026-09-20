@@ -25,6 +25,10 @@ global function printt_spamLog
 global function printl_spamLog
 global function printt_spam
 global function SpamWarning
+global function printt_verticle
+global function print_string_array
+global function print_var_table
+global function print_var_array
 
 global function LevelVarInit
 
@@ -69,7 +73,19 @@ void function printt( ... )
 
 	local msg = vargv[0]
 	for ( int i = 1; i < vargc; i++ )
-		msg = (msg + " " + vargv[i])
+		msg = ( msg + " " + vargv[i] )
+
+	printl( msg )
+}
+
+void function printt_verticle( ... )
+{
+	if ( vargc <= 0 )
+		return
+
+	local msg = "\n" + vargv[0]
+	for ( int i = 1; i < vargc; i++ )
+		msg = ( msg + "\n" + vargv[i] )
 
 	printl( msg )
 }
@@ -81,7 +97,7 @@ void function printw( ... )
 
 	local msg = vargv[0]
 	for ( int i = 1; i < vargc; i++ )
-		msg = (msg + " " + vargv[i])
+		msg = ( msg + " " + vargv[i] )
 
 	Warning( string( msg ) )
 }
@@ -96,6 +112,34 @@ void function PrintFunc( var val = null )
 	{
 		printt( "PrintFunc:", getstackinfos( 2 ).func )
 	}
+}
+
+void function print_string_array( array<string> args )
+{
+	string test = "\n\n------ PRINT STRING ARRAY ------\n\n"
+	
+	foreach( arg in args )
+		test += format( "	\"%s\", \n", arg )
+	
+	printl( test )
+}
+
+void function print_var_table( table<string,var> tbl )
+{
+	string prnt = "\n\n------ PRINT TABLE ------\n\n"
+	foreach( string k, var v in tbl )
+		prnt += format( "	[%s] = %s\n", k, string( v ) )
+	
+	printl( prnt )
+}
+
+void function print_var_array( array<var> arr )
+{
+	string prnt = "\n\n------ PRINT ARRAY ------\n\n"
+	foreach( i, v in arr )
+		prnt += format( "	[%d] = %s\n", i, string( v ) )
+	
+	printl( prnt )
 }
 
 string function VM_NAME()

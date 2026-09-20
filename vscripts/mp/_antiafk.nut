@@ -1,6 +1,5 @@
 global function Flowstate_Afk_Init
 global function Flowstate_InitAFKThreadForPlayer
-global function AfkThread_PlayerMoved
 
 struct 
 {
@@ -23,7 +22,7 @@ enum eAntiAfkPlayerState
 void function Flowstate_Afk_Init()
 {
 	file.Flowstate_antiafk_warn 	= GetCurrentPlaylistVarFloat( "Flowstate_antiafk_warn", 15.0 )
-	file.Flowstate_antiafk_grace 	= GetCurrentPlaylistVarFloat( "Flowstate_antiafk_grace", 120 )
+	file.Flowstate_antiafk_grace 	= GetCurrentPlaylistVarFloat( "Flowstate_antiafk_grace", bAfkToRest() ? 45 : 120 )
 	file.Flowstate_antiafk_interval = GetCurrentPlaylistVarFloat( "Flowstate_antiafk_interval", 10.0 )
 	file.flowstate_afk_kick_enable 	= GetCurrentPlaylistVarBool( "flowstate_afk_kick_enable", true )
 	file.enable_afk_thread 			= GetCurrentPlaylistVarBool( "enable_afk_thread", true )
@@ -35,19 +34,18 @@ void function Flowstate_InitAFKThreadForPlayer( entity player )
 		//return
 	#endif
 
-	if
-	( 
-		!IsValid( player ) || 
-		 IsAdmin( player ) || 
-		 !file.flowstate_afk_kick_enable || 
-		 !file.enable_afk_thread 
-	)
-	return
-
+	if( !IsValid( player ) )
+		return 
+		
+	//(mk): these are needed for game logic that utilizs p.lastmoved 
 	AfkThread_AddPlayerCallbacks( player ) //readded mkos
+	SetPlayerMoved( player )
+
+	if( !file.flowstate_afk_kick_enable || !file.enable_afk_thread ) // IsAdmin( player ) //(mk): removed admin check here so admins can still be afked-to-rest
+		return
+
 	//player.SetSendInputCallbacks( true ) //disabled internal call
-	AfkThread_PlayerMoved( player )
-	thread CheckAfkKickThread(player)
+	thread CheckAfkKickThread( player )
 }
 
 int function GetAfkState( entity player )
@@ -57,7 +55,7 @@ int function GetAfkState( entity player )
 
 	float lastmove = player.p.lastmoved
 	
-	if( bAfkToRest() && !isPlayerInRestingList( player ) )
+	if( bAfkToRest() && !Gamemode1v1_IsPlayerResting( player ) )
 	{
 		if ( Time() > lastmove + ( localgrace - warn ) )
 		{
@@ -86,7 +84,7 @@ void function AfkWarning( entity player )
 void function CheckAfkKickThread(entity player)
 {	
 	//printt("Flowstate - AFK thread initialized for " + player.GetPlayerName() )	
-	while( true )
+	for( ; ; )
 	{
 		wait file.Flowstate_antiafk_interval
 		
@@ -102,7 +100,7 @@ void function CheckAfkKickThread(entity player)
 		if ( player.p.isSpectating )
 			continue
 			
-		if ( g_bRestEnabled() && IsCurrentState( player, e1v1State.RESTING ) )
+		if ( bAfkToRest() && Gamemode1v1_IsRestEnabled() && Gamemode1v1_IsPlayerInState( player, e1v1State.RESTING ) )
 			continue
 		
 		switch ( GetAfkState( player ) )
@@ -114,21 +112,29 @@ void function CheckAfkKickThread(entity player)
 				AfkWarning( player )
 				break
 			
-			//mkos modificaiton, afk_to_rest = bAfkToRest()
 			case eAntiAfkPlayerState.AFK:
 				if ( bAfkToRest() )
-				{		
+				{
 					player.p.lastmoved = Time()
 					
-					if( g_bRestEnabled() )
-						mkos_Force_Rest( player )
-					else 
+					if( Gamemode1v1_IsRestEnabled()  )
+					{
+						if( Gamemode1v1_IsPlayerResting( player ) )
+						{
+							SetPlayerMoved( player )
+							continue
+						}
+						
+						Gamemode1v1_ForceRest( player )
+					}
+					else
 						mAssert( false, "Playlist has afk_to_rest enabled, but mode has rest disabled internally. Try using Gamemode1v1_SetRestEnabled()" )
-						// We WANT to assert here, because this condition will always run with no effect. 
+						//(mk): We WANT to assert here, because otherwise, this condition will always run with no effect. 
 				}
-				else 
+				else
 				{	
-					KickPlayerById( player.GetPlatformUID(), "You were AFK for too long" )		
+					if( !IsAdmin( player ) )
+						KickPlayerById( player.GetPlatformUID(), "You were AFK for too long" )
 				}
 				break
 				
@@ -138,39 +144,34 @@ void function CheckAfkKickThread(entity player)
 				break
 		}
 		
-		wait 1
-		
+		wait 1		
     }
 }
 
-bool function AfkThread_PlayerMoved( entity player ) //callback is defined as bool return func...
+void function SetPlayerMoved( entity player )
 {
-	// if( !IsValid( player ) ) //is this needed? lets find out.
-		// return false
-	
     player.p.lastmoved = Time()
-	return true
 }
 
 void function AfkThread_AddPlayerCallbacks( entity player )
 {
-	AddPlayerPressedForwardCallback( player, AfkThread_PlayerMoved, 1 )
-	AddPlayerPressedBackCallback( player, AfkThread_PlayerMoved, 1 )
-	AddPlayerPressedLeftCallback( player, AfkThread_PlayerMoved, 1 )
-	AddPlayerPressedRightCallback( player, AfkThread_PlayerMoved, 1 )
+	AddPlayerPressedForwardCallback( player, SetPlayerMoved, 1 )
+	AddPlayerPressedBackCallback( player, SetPlayerMoved, 1 )
+	AddPlayerPressedLeftCallback( player, SetPlayerMoved, 1 )
+	AddPlayerPressedRightCallback( player, SetPlayerMoved, 1 )
 	
 	
 	//disabled and reworked to above (fixed callback move inputs) -- mkos
 	
 	/*
-	AddButtonPressedPlayerInputCallback( player, IN_ATTACK, AfkThread_PlayerMoved )
-	AddButtonPressedPlayerInputCallback( player, IN_JUMP, AfkThread_PlayerMoved )
-	AddButtonPressedPlayerInputCallback( player, IN_FORWARD, AfkThread_PlayerMoved )
-	AddButtonPressedPlayerInputCallback( player, IN_BACK, AfkThread_PlayerMoved )
-	AddButtonPressedPlayerInputCallback( player, IN_USE, AfkThread_PlayerMoved )
-	AddButtonPressedPlayerInputCallback( player, IN_MOVELEFT, AfkThread_PlayerMoved )
-	AddButtonPressedPlayerInputCallback( player, IN_MOVERIGHT, AfkThread_PlayerMoved )
-	AddButtonPressedPlayerInputCallback( player, IN_LEFT, AfkThread_PlayerMoved )
-	AddButtonPressedPlayerInputCallback( player, IN_RIGHT, AfkThread_PlayerMoved )
+	AddButtonPressedPlayerInputCallback( player, IN_ATTACK, SetPlayerMoved )
+	AddButtonPressedPlayerInputCallback( player, IN_JUMP, SetPlayerMoved )
+	AddButtonPressedPlayerInputCallback( player, IN_FORWARD, SetPlayerMoved )
+	AddButtonPressedPlayerInputCallback( player, IN_BACK, SetPlayerMoved )
+	AddButtonPressedPlayerInputCallback( player, IN_USE, SetPlayerMoved )
+	AddButtonPressedPlayerInputCallback( player, IN_MOVELEFT, SetPlayerMoved )
+	AddButtonPressedPlayerInputCallback( player, IN_MOVERIGHT, SetPlayerMoved )
+	AddButtonPressedPlayerInputCallback( player, IN_LEFT, SetPlayerMoved )
+	AddButtonPressedPlayerInputCallback( player, IN_RIGHT, SetPlayerMoved )
 	*/
 }

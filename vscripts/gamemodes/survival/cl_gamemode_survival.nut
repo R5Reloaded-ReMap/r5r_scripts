@@ -73,6 +73,7 @@ global function SetVictorySequenceSunSkyIntensity
 global function IsShowingVictorySequence
 global function ServerCallback_NessyMessage
 global function ShowChampionVictoryScreen
+global function SetCustomPlayerInfoShadowFormState
 
 global function CanReportPlayer
 
@@ -101,8 +102,8 @@ global function SetNextCircleDisplayCustomClear
 global function SetChampionScreenRuiAsset
 global function InitSurvivalHealthBar
 #if DEVELOPER
-global function Dev_ShowVictorySequence
-global function Dev_AdjustVictorySequence
+	global function Dev_ShowVictorySequence
+	global function Dev_AdjustVictorySequence
 #endif
 
 global function ChangeHUDVisibilityWhenInCryptoDrone
@@ -118,6 +119,8 @@ global function ServerCallback_Scenarios_MatchEndAnnouncement
 global function FS_ForceCompass
 global function FS_DestroyCompass
 global function AddInWorldMinimapObject
+
+global function FS_ShouldHookMapKey
 
 global struct NextCircleDisplayCustomData
 {
@@ -517,7 +520,8 @@ void function Flowstate_CheckForLaserSightsAndApplyEffect()
 			if ( mod != "laser_sight_l1" && mod != "laser_sight_l2" && mod != "laser_sight_l3" && mod != "laser_sight_l4" )
 			{
 				hasLaser = false
-			} else
+			} 
+			else
 			{
 				hasLaser = true
 				exitCheck = true
@@ -1021,6 +1025,12 @@ void function ClearCustomPlayerInfoTreatment(entity player)
 		delete file.customPlayerInfoTreatment[player]
 		RuiSetImage( file.pilotRui, "customTreatment", $"" )
 	}
+}
+
+void function SetCustomPlayerInfoShadowFormState( entity player, bool state )
+{
+	if ( file.pilotRui != null )
+		RuiSetBool( file.pilotRui, "useShadowFormFrame", state )
 }
 
 void function SetCustomPlayerInfoColor( entity player, vector characterColor )
@@ -1912,6 +1922,7 @@ void function ToggleFireSelect( entity player )
 void function ServerCallback_SUR_PingMinimap( vector origin, float duration, float spreadRadius, float ringRadius, int colorIndex )
 {
 	vector color = TEAM_COLOR_ENEMY
+	asset altIcon = $""
 	switch ( colorIndex )
 	{
 		case 0:
@@ -1925,12 +1936,17 @@ void function ServerCallback_SUR_PingMinimap( vector origin, float duration, flo
 		case 2:
 			color = COLOR_AIRDROP
 			break
+
+		case 3:
+			color = CRAFTING_COLOR
+			altIcon = $"rui/hud/ping/hex_pulse"
+			break
 	}
-	thread ServerCallback_SUR_PingMinimap_Internal( origin, duration, spreadRadius, ringRadius, color )
+	thread ServerCallback_SUR_PingMinimap_Internal( origin, duration, spreadRadius, ringRadius, color, altIcon )
 }
 
 
-void function ServerCallback_SUR_PingMinimap_Internal( vector origin, float duration, float spreadRadius, float ringRadius, vector color )
+void function ServerCallback_SUR_PingMinimap_Internal( vector origin, float duration, float spreadRadius, float ringRadius, vector color, asset altIcon = $"" )
 {
 	entity player = GetLocalViewPlayer()
 	player.EndSignal( "OnDestroy" )
@@ -1950,8 +1966,8 @@ void function ServerCallback_SUR_PingMinimap_Internal( vector origin, float dura
 	{
 		vector newOrigin = origin + < RandomIntRange( randMin, randMax ), RandomIntRange( randMin, randMax ), 0 >  //
 
-		Minimap_RingPulseAtLocation( newOrigin, ringRadius, color / 255.0, pulseDuration, lifeTime, false )
-		FullMap_PingLocation( newOrigin, ringRadius, color / 255.0, pulseDuration, lifeTime, false )
+		Minimap_RingPulseAtLocation( newOrigin, ringRadius, color / 255.0, pulseDuration, lifeTime, false, altIcon )
+		FullMap_PingLocation( newOrigin, ringRadius, color / 255.0, pulseDuration, lifeTime, false, altIcon )
 
 		wait RandomFloatRange( minWait, maxWait )
 	}
@@ -2056,18 +2072,19 @@ bool function MapDevCheatsAreActive()
 
 void function UpdateMap_THREAD()
 {
-	EndSignal( clGlobal.signalDummy, "OnHideScoreboard" )
-
 	Fullmap_SetVisible( true )
 	UpdateMainHudVisibility( GetLocalViewPlayer() )
 
-	OnThreadEnd(
-		function() : ()
+	OnThreadEnd
+	(
+		void function() : ()
 		{
 			Fullmap_SetVisible( false )
 			UpdateMainHudVisibility( GetLocalViewPlayer() )
 		}
 	)
+	
+	EndSignal( clGlobal.signalDummy, "OnHideScoreboard" )
 
 	for ( ; ; )
 	{
@@ -2126,18 +2143,26 @@ void function ChangeFullMapZoomFactor( float delta )
 	}
 }
 
-
+const array<int> SHOULD_HOOK_MAP_KEY =
+[
+	ePlaylists.fs_1v1, 
+	ePlaylists.fs_lgduels_1v1, 
+	ePlaylists.fs_vamp_1v1,
+	ePlaylists.fs_snd, 
+	ePlaylists.fs_dm,
+	ePlaylists.fs_dm_fast_instagib,
+	ePlaylists.fs_realistic_ttv,
+	ePlaylists.fs_grapples_n_guns
+	
+	//ePlaylists.fs_scenarios
+]
 bool function FS_ShouldHookMapKey() 
 {
-	if( Flowstate_IsHaloMode() && Playlist() != ePlaylists.fs_haloMod_survival && GetGameState() == eGameState.Playing
+	if
+	( 	
+		Flowstate_IsHaloMode() && Playlist() != ePlaylists.fs_haloMod_survival && GetGameState() == eGameState.Playing
 		|| Gamemode() == eGamemodes.CUSTOM_CTF && GetGameState() == eGameState.Playing 
-		|| Playlist() == ePlaylists.fs_1v1 
-		|| Playlist() == ePlaylists.fs_lgduels_1v1  
-		|| Playlist() == ePlaylists.fs_snd 
-		|| Playlist() == ePlaylists.fs_dm
-		|| Playlist() == ePlaylists.fs_dm_fast_instagib
-		|| Playlist() == ePlaylists.fs_realistic_ttv
-		// || Playlist() == ePlaylists.fs_scenarios
+		|| SHOULD_HOOK_MAP_KEY.contains( Playlist() )
 	)
 		return true
 	
@@ -2571,7 +2596,7 @@ void function AddInWorldMinimapObjectInternal( entity ent, var screen, asset def
 
 	var rui = RuiCreate( minimapAsset, screen, drawType, FULLMAP_Z_BASE + zOrder + zOrderOffset )
 
-	if ( ent.IsPlayer() ) //Colombia
+	if ( ent.IsPlayer() )
 	{
 		foreach(player, savedRui in file.playerArrows)
 		{
@@ -2936,11 +2961,12 @@ void function OnPropDynamicCreated( entity prop )
 
 void function OnPropCreated( entity prop )
 {
-	if ( prop.GetSurvivalInt() < 0 )
-	{
-		PROTO_OnContainerCreated( prop )
-		return
-	}
+	//(cafe) not used
+	// if ( prop.GetSurvivalInt() < 0 )
+	// {
+		// PROTO_OnContainerCreated( prop )
+		// return
+	// }
 }
 
 
@@ -3482,7 +3508,8 @@ void function WaitingForPlayersOverlay_Setup( entity player )
 
 void function WaitingForPlayersOverlay_Destroy()
 {
-	WaitingForPlayers_RemoveCustomCameras()
+	if( Gamemode() != eGamemodes.fs_aimtrainer )
+		WaitingForPlayers_RemoveCustomCameras()
 	
 	if ( s_overlayRui == null )
 		return
@@ -3532,16 +3559,10 @@ void function WaitingForPlayers_CreateCustomCameras()
 
 void function FS_GamemodeHudSetup()
 {
+	if( Gamemode() == eGamemodes.SURVIVAL )
+		return//hud is set in wrong place, needs to be on loadscreen
 	Hud_SetVisible(HudElement( "WaitingForPlayers_GamemodeFrame" ), true)
 
-	if( Gamemode() == eGamemodes.SURVIVAL )
-	{
-		Hud_SetVisible(HudElement( "WaitingForPlayers_Credits" ), true)
-		Hud_SetVisible(HudElement( "WaitingForPlayers_Credits2" ), true)
-		Hud_SetVisible(HudElement( "WaitingForPlayers_Credits3" ), true)
-		Hud_SetVisible(HudElement( "WaitingForPlayers_CreditsFrame" ), true)
-	}
-	
 	RuiSetImage( Hud_GetRui( HudElement( "WaitingForPlayers_GamemodeFrame" ) ), "basicImage", $"rui/gamemodes/survival/waitingforplayers/gamemode")
 	RuiSetImage( Hud_GetRui( HudElement( "WaitingForPlayers_MapFrame" ) ), "basicImage", $"rui/gamemodes/survival/waitingforplayers/map")
 	
@@ -3590,10 +3611,6 @@ void function DisableCustomMapAndGamemodeNameFrames()
 	Hud_SetVisible(HudElement( "WaitingForPlayers_GamemodeName" ), false)
 	Hud_SetVisible(HudElement( "WaitingForPlayers_MapFrame" ), false)
 	Hud_SetVisible(HudElement( "WaitingForPlayers_MapName" ), false)
-	Hud_SetVisible(HudElement( "WaitingForPlayers_Credits" ), false)
-	Hud_SetVisible(HudElement( "WaitingForPlayers_Credits2" ), false)
-	Hud_SetVisible(HudElement( "WaitingForPlayers_Credits3" ), false)
-	Hud_SetVisible(HudElement( "WaitingForPlayers_CreditsFrame" ), false)
 	
 }
 
@@ -3605,7 +3622,7 @@ void function WaitingForPlayers_RemoveCustomCameras()
 	SetMapSetting_FogEnabled( true )
 	DisableCustomMapAndGamemodeNameFrames()
 	
-	if( Playlist() != ePlaylists.fs_survival && Playlist() != ePlaylists.fs_survival_duos && Playlist() != ePlaylists.fs_survival_solos )
+	if( Playlist() != ePlaylists.survival && Playlist() != ePlaylists.survival_duos && Playlist() != ePlaylists.survival_solos )
 		return
 		
 	entity targetCamera = GetEntByScriptName( "target_char_sel_camera_new" )
@@ -3636,7 +3653,11 @@ array<WaitingForPlayersCameraLocPair> function GetCamerasForMap( string map )
 		case "mp_rr_desertlands_holiday":
 		case "mp_rr_desertlands_64k_x_64k":
 		case "mp_rr_desertlands_64k_x_64k_nx":
+		case "mp_rr_desertlands_64k_x_64k_mv":
 		case "mp_rr_desertlands_64k_x_64k_tt":
+		case "mp_rr_desertlands_mu1":
+		case "mp_rr_desertlands_mu1_tt":
+		case "mp_rr_desertlands_mu2":
 			cutsceneSpawns.append(NewCameraPair( <-17572.3301, 11646.5137, -3777.35034>, <0, 155.688446, 0> ))
 			cutsceneSpawns.append(NewCameraPair( <-15497.5586, 25198.2129, -4041.42749>, <0, 9.20065498, 0> ))
 			cutsceneSpawns.append(NewCameraPair( <28017.6992, 8541.48926, -3296.67017>, <0, 106.955139, 0> ))
@@ -3655,6 +3676,7 @@ array<WaitingForPlayersCameraLocPair> function GetCamerasForMap( string map )
 		break
 		
 		case "mp_rr_canyonlands_mu2":
+		case "mp_rr_canyonlands_mu2_tt":
 			cutsceneSpawns.append(NewCameraPair( <-6049.01807, 18478.2285, 2771.03174>, <0, -34.2617683, 0> ))
 			cutsceneSpawns.append(NewCameraPair( <-15686.7402, 1259.25342, 2888.13013>, <0, 143.531845, 0> ))
 			cutsceneSpawns.append(NewCameraPair( <-26376.4258, -3842.12036, 2760.02759>, <0, 52.9255295, 0> ))
@@ -3664,12 +3686,63 @@ array<WaitingForPlayersCameraLocPair> function GetCamerasForMap( string map )
 			cutsceneSpawns.append(NewCameraPair( <-12433.5381, -9732.68555, 3427.97339>, <0, -48.9345093, 0> ))
 		break
 		
-		case "mp_rr_olympus_mu1":
-			cutsceneSpawns.append(NewCameraPair( <0,0,0>, <0,0,0> ) )
+		case "mp_rr_olympus_tt":
+		case "mp_rr_olympus":
+			cutsceneSpawns.append(NewCameraPair( <-25235.1055, 1220.16565, -5563.3125> , <0, 14.9181824, 0> ))
+			cutsceneSpawns.append(NewCameraPair( <-22515.6289, 18350.7285, -6227.43359> , <0, -31.012104, 0> ))
+			cutsceneSpawns.append(NewCameraPair( <-34199.1133, 10023.2178, -3739.12305> , <0, 57.2625656, 0> ))
+			cutsceneSpawns.append(NewCameraPair( <-42535.6719, -8651.65527, -3381.62817> , <0, -117.898598, 0> ))
+			cutsceneSpawns.append(NewCameraPair( <-34771.207, -18455.5371, -3415.63062> , <0, 96.4288177, 0> ))
+			cutsceneSpawns.append(NewCameraPair( <-7813.10205, -26010.8672, -2247.70752> , <0, -149.884628, 0> ))
+			cutsceneSpawns.append(NewCameraPair( <-3477.38794, -29067.6367, -975.647644> , <0, 51.4941902, 0> ))
+			cutsceneSpawns.append(NewCameraPair( <22722.5684, -17699.8711, -5239.71533> , <0, -123.869438, 0> ))
+			cutsceneSpawns.append(NewCameraPair( <14765.1807, -4291.78955, -3995.76563> , <0, -23.8360157, 0> ))
+			cutsceneSpawns.append(NewCameraPair( <16342.6611, 5930.64844, -3591.96875> , <0, 149.040939, 0> ))
+			cutsceneSpawns.append(NewCameraPair( <5397.75439, 22433.9219, -5673.11865> , <0, 43.7146683, 0> ))
+			cutsceneSpawns.append(NewCameraPair( <-293.680786, 6115.55811, -4848.82373> , <0, 68.2613144, 0> ))
+			cutsceneSpawns.append(NewCameraPair( <-2724.11963, 862.047485, -5981.30273> , <0, -88.4052658, 0> ))
+			cutsceneSpawns.append(NewCameraPair( <-20965.0313, 373.067291, -5486.98096> , <0, -61.3815041, 0> ))
 		break
 		
-		case "mp_flowstate":
+		case "mp_rr_arena_empty":
 			cutsceneSpawns.append(NewCameraPair( <41000,-10000,0>, <0,0,0> ) )
+		break
+
+		case "mp_rr_arena_composite":
+		cutsceneSpawns.append(NewCameraPair( <2307.4375, 1415.3374, 429.479797> , <0, 130.879272, 0> ) )
+		cutsceneSpawns.append(NewCameraPair( <2877.44409, 5697.83105, 1672.90344> , <0, 10.1077566, 0> ) )
+		cutsceneSpawns.append(NewCameraPair( <-890.250305, 6196.06494, 1501.16028> , <0, -149.713516, 0> ) )
+		cutsceneSpawns.append(NewCameraPair( <-1853.4906, 4318.04736, 791.386963> , <0, -108.551895, 0> ) )
+		cutsceneSpawns.append(NewCameraPair( <-2628.37329, -472.374023, 325.194672> , <0, 80.4712677, 0> ) )
+		cutsceneSpawns.append(NewCameraPair( <-854.504883, 844.514343, 608.447632> , <0, -21.671114, 0> ) )
+		break
+		
+		case "mp_rr_aqueduct":
+		cutsceneSpawns.append(NewCameraPair( <4536.32324, -4842.01514, 627.977661> , <0, 168.955353, 0> ) )
+		cutsceneSpawns.append(NewCameraPair( <2123.55908, -5994.70752, 422.766052> , <0, 169.391968, 0> ) )
+		cutsceneSpawns.append(NewCameraPair( <-324.00824, -6295.51123, 1393.36169> , <0, 61.8894501, 0> ) )
+		cutsceneSpawns.append(NewCameraPair( <-974.514282, -1108.53979, -55.8972359> , <0, -51.9891815, 0> ) )
+		cutsceneSpawns.append(NewCameraPair( <1274.22766, -5196.98389, 1064.73584> , <0, 143.300842, 0> ) )
+		cutsceneSpawns.append(NewCameraPair( <-763.161804, -5228.40234, 477.852356> , <0, 124.9048, 0> ) )
+		break
+		
+		case "mp_rr_arena_phase_runner":
+		cutsceneSpawns.append(NewCameraPair( <20500.5332, 18673.2109, -371.418091> , <0, 5.8379364, 0> ) )
+		cutsceneSpawns.append(NewCameraPair( <22216.2598, 14448.0566, 120.776726> , <0, 26.7628136, 0> ) )
+		cutsceneSpawns.append(NewCameraPair( <25429.293, 13582.9941, -808.916077> , <0, 10.6653433, 0> ) )
+		cutsceneSpawns.append(NewCameraPair( <28682.6699, 17033.4258, -739.663818> , <0, 171.884537, 0> ) )
+		cutsceneSpawns.append(NewCameraPair( <23470.3652, 17689.8359, -1296.198> , <0, 64.2433472, 0> ) )
+		cutsceneSpawns.append(NewCameraPair( <24990.2383, 21005.0762, -621.474304> , <0, 46.2398949, 0> ) )
+
+		break
+		
+		case "mp_rr_party_crasher":
+		cutsceneSpawns.append(NewCameraPair( <3385.96265, -1591.92493, 2220.44629> , <0, 97.7711029, 0> ) )
+		cutsceneSpawns.append(NewCameraPair( <-1012.03864, -2472.96851, 1999.18762> , <0, 131.942291, 0> ) )
+		cutsceneSpawns.append(NewCameraPair( <-1949.47925, -565.452087, 1366.40222> , <0, -4.39630127, 0> ) )
+		cutsceneSpawns.append(NewCameraPair( <-840.577515, 3031.18994, 1057.86731> , <0, -49.7104607, 0> ) )
+		cutsceneSpawns.append(NewCameraPair( <416.486328, 2083.01709, 562.318604> , <0, -83.0055008, 0> ) )
+		cutsceneSpawns.append(NewCameraPair( <2646.22314, 2588.46582, 1168.85779> , <0, -107.622498, 0> ) )
 		break
 	}
 	
@@ -3680,7 +3753,7 @@ void function OnGamestatePlaying()
 {
 	WaitingForPlayersOverlay_Destroy()
 	
-	if( Playlist() == ePlaylists.fs_survival || Playlist() == ePlaylists.fs_survival_duos || Playlist() == ePlaylists.fs_survival_solos )
+	if( Playlist() == ePlaylists.survival || Playlist() == ePlaylists.survival_duos || Playlist() == ePlaylists.survival_solos )
 		GetLocalClientPlayer().ClearMenuCameraEntity()
 }
 
@@ -4021,7 +4094,7 @@ void function FullMap_CommonTrackEntOrigin( var rui, entity ent, bool doTrackAng
 }
 
 
-var function FullMap_Ping_( float radius, vector color, float pulseDuration, float lifeTime, bool reverse )
+var function FullMap_Ping_( float radius, vector color, float pulseDuration, float lifeTime, bool reverse, asset customRing = $"" )
 {
 	var rui = FullMap_CommonAdd( $"ui/in_world_minimap_ping.rpak" )
 
@@ -4031,6 +4104,9 @@ var function FullMap_Ping_( float radius, vector color, float pulseDuration, flo
 	RuiSetFloat( rui, "pulseDuration", pulseDuration )
 	RuiSetBool( rui, "reverse", reverse )
 	RuiSetImage( rui, "marker", $"" )
+
+	if ( customRing != "" )
+		RuiSetImage( rui, "pulse", customRing )
 
 	Fullmap_AddRui( rui )
 
@@ -4044,12 +4120,12 @@ var function FullMap_Ping_( float radius, vector color, float pulseDuration, flo
 }
 
 
-var function FullMap_PingLocation( vector origin, float radius, vector color, float pulseDuration, float lifeTime = -1, bool reverse = false )
+var function FullMap_PingLocation( vector origin, float radius, vector color, float pulseDuration, float lifeTime = -1, bool reverse = false, asset altIcon = $"" )
 {
 	if ( !file.mapTopo )
 		return null
 
-	var rui = FullMap_Ping_( radius, color, pulseDuration, lifeTime, reverse )
+	var rui = FullMap_Ping_( radius, color, pulseDuration, lifeTime, reverse, altIcon )
 	RuiSetFloat3( rui, "objectPos", origin )
 	RuiSetFloat3( rui, "objectAngles", <0, 0, 0> )
 	return rui
@@ -4616,7 +4692,7 @@ void function ShowVictorySequence( bool placementMode = false )
 	ScreenFade( player, 255, 255, 255, 255, 0.4, 0.0, FFADE_IN | FFADE_PURGE )
 
 	if( GetCurrentPlaylistVarBool( "survival_server_restart_after_end", false ) )
-		DM_HintCatalog( 5, 0 )
+		DM_HintCatalog( 5, null )
 	
 	asset defaultModel                = GetGlobalSettingsAsset( DEFAULT_PILOT_SETTINGS, "bodyModel" )
 	LoadoutEntry loadoutSlotCharacter = Loadout_CharacterClass()

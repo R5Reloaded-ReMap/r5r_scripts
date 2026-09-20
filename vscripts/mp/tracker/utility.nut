@@ -1,115 +1,138 @@
-global function GetAdminList																	//~mkos
-global function EnableVoice
-//global function StringToArray
-global function trim
-global function Concatenate
-global function IsNumeric
-global function IsNum
+untyped //needed for sqwarning																		//mkos
+
+//player util
+global function CheckRate
+global function ResetRate
 global function GetPlayer
 global function GetPlayerEntityByUID
 global function GetPlayerEntityByName
-global function Is_Bool
-global function sanitize
+global function IsServerAdmin
+global function GetAdminList
+global function AdminMessage
+global function SendResponse
+global function SendPM
+
+//string util
+global function IsStringNumeric
+global function IsStringNumber
+global function IsStringBool
+global function StringToBool
+global function StringRemoveControlCharacters
+global function Concatenate
 global function LineBreak
-global function print_string_array
-global function CheckRate
+global function IsSafeString
+global function UnescapeWithRules
+global function FindFirstUnescaped
+global function SplitUnescapedWithRules
+global function ResolveFormattersForPlayerMessage
+global function PrepareForJson	
+
+//print util -- moved to _threads
+// global function print_string_array
+// global function print_var_table
+// global function print_var_array
+
+//Tracker print-to-console as native
+global function sqprint
+global function sqerror
+global function sqwarning
+
+//Weapons util:
 global function ParseWeapon
 global function IsWeaponValid
+global function TrackerWepTable
+global function GetWeaponSettingIntFromFile
+global function ShouldExcludeDamageSourceShipping
+global function DEV_PrintTrackerWeapons
+global function PrintSupportedAttachpointsForWeapon
+
+//Client commands util
+global function __PlayerAdminsInit
 global function ClientCommand_mkos_return_data
 global function ClientCommand_mkos_admin
-global function INIT_CC_MapNames
-global function INIT_CC_GameTypes
-global function INIT_CC_playeradmins
-global function update
-global function TrackerWepTable
-global function exclude
-global function ReturnValue
-global function ReturnKey
-global function GetDefaultIBMM
-global function SetDefaultIBMM
-global function IsTrackerAdmin
-global function PlayTime
-//global function truncate
-global function DEV_PrintTrackerWeapons
-global function ValidateIBMMWaitTime
-global function VerifyAdmin
-global function IsSafeString
-global function GetPlaylistMaps
-global function TP
+global function CheckAdmin_OnConnect
+global function IsAuthEnabled
+
+//misc
+global function TrackerUtilityInit
+global function EnableVoice
+global function PlayTimeFromSecondsString
 global function Tracker_DetermineNextMap
 global function Tracker_GotoNextMap
-global function PrepareForJson
+global function ArrayUniqueInt
+global function ArrayUniqueString
+global function IsMapPlaylistGamemodeRotationEnabled
+global function DecideNextMapPlaylistGamemodeRotation
+global function IsValidCharacterGUID
+global function TP
+
+//code callbacks
+global function CodeCallback_SendMessage
+
+#if DEVELOPER
+	global function RegExpUnitTest
+	global function RegExpUnitTest2
+	global function StringUnitTest
+	global function TestRandom
+#endif
 
 #if TRACKER && HAS_TRACKER_DLL
 	global function PrintMatchIDtoAll
 #endif
 
-//Todo: Clean up/refactor
-//entire file needs audited for code refactor ~mkos
+global struct ParseRules
+{
+	string escapeChar
+	table<string,string> escapeMap
+}
 
-//tables 
-table<string, string> player_admins
-table<string,int> WeaponIdentifiers = {}
+struct PlaylistGamemodeRotateData
+{
+	string map 
+	string playlist
+	string gamemode
+	int minplayers
+	int maxplayers
+}
 
-//arrays 
-array< array< string > > list_maps //todo deprecate
-array< array< string > > list_gamemodes //todo deprecate
-
-struct {
-
-	array <string> ADMINS
-	bool stop_update_msg_flag = false
-
+struct
+{
+	table< PlaylistGamemodeRotateData, array< string > > errorRotationData
+	array< PlaylistGamemodeRotateData > allRotationData
+	table< string, table< string, string > > tbl_adminConfirmations
+	table< string, int > tbl_weaponIdentifiers
+	array< string > adminsArray
+	
+	bool bStopUpdateMsg
+	bool bAutoRotationEnabled
+	bool bAllowLooseNameComp
+	
 } file
 
-
-	void function INIT_CC_MapNames()
+void function TrackerUtilityInit()
+{
+	RegisterSignal( "ConfirmAction" )
+	
+	string autoRotateList 				= GetCurrentPlaylistVarString( "auto_rotate_list", "" )
+	bool autoRotateListForcedDisabled 	= Dev_CommandLineParmValue( "autoRotateForceDisable" ) == "true"
+	
+	if( autoRotateList != "" && !autoRotateListForcedDisabled )
 	{
-		list_maps = 
-		[
-			["dropoff", "mp_rr_arena_composite"],
-			["overflow", "mp_rr_aqueduct"],
-			["firingrange", "mp_rr_canyonlands_staging"],
-			["kingscanyon", "mp_rr_canyonlands_64k_x_64k"],
-			["kingscanyons2", "mp_rr_canyonlands_mu1"],
-			["kingscanyonafterdark", "mp_rr_canyonlands_mu1_night"],
-			["worldsedge", "mp_rr_desertlands_64k_x_64k"],
-			["worldsedgeafterdark", "mp_rr_desertlands_64k_x_64k_nx"],
-			["miragevoyage", "mp_rr_desertlands_64k_x_64k_tt"],
-			["partycrasher", "mp_rr_party_crasher"],
-			["skygarden", "mp_rr_arena_skygarden"],
-			["ashsredemption", "mp_rr_ashs_redemption"],
-			["overflownight", "mp_rr_aqueduct_night"]
-		];	
+		file.bAutoRotationEnabled = true
+		AutoMapPlaylistGamemodeRotationInit( autoRotateList )
+		AddCallback_GameStateEnter( eGameState.Postmatch, DecideNextMapPlaylistGamemodeRotation )
 	}
 	
-	void function INIT_CC_GameTypes()
-	{
-	
-		list_gamemodes = [
-			["1v1", "fs_1v1"],
-			["dm", "fs_dm"],
-			["tdm", "fs_tdm"],
-			["prophunt", "fs_prophunt"],
-			["duckhunt", "fs_duckhunt"],
-			["solobr", "fs_survival_solos"],
-			["duobr", "fs_survival_duos"],
-			["triobr", "fs_survival_trios"],
-			["surf", "fs_surf"],
-			["gym", "fs_movementgym"],
-			["infected", "fs_infected"],
-			["survival", "fs_survival"],
-			["survivaldev", "survival_dev"]
-		];
-	}
+	file.bAllowLooseNameComp = GetCurrentPlaylistVarBool( "enable_loose_playername_comparison", true )
+}
 	
 	//client command: show
-		bool function ClientCommand_mkos_return_data(entity player, array<string> args)
-		{		
-			if ( !CheckRate( player ) ) 
+		bool function ClientCommand_mkos_return_data( entity player, array<string> args )
+		{
+			if ( !CheckRate( player, "verbose_stream", 5.0, true ) ) 
 				return false
 			
-			if ( args.len() < 1)
+			if ( args.len() < 1 )
 			{	
 				Message( player, "\n\n\nUsage: ", " showdata argument \n\n\n Arguments:\n map - Shows current map name \n round - Shows current round number \n input - Shows a list of players and their current input", 5 )
 				return true	
@@ -127,97 +150,94 @@ struct {
 				case "map":
 					//sqprint( GetMapName() )
 					Message( player, "Mapname:", GetMapName(), 5 )
-					return true;
+					return true
+					
 				case "round":
 					//sqprint( GetCurrentRound().tostring() )
 					Message( player, "Round:", GetCurrentRound().tostring(), 5 )
-					return true;
+					return true
+					
 				case "player":
 						
-						string stringHandicap = "";
-						string handicap = "";
-						string p_input = "";
-						string data = "";
-						string inputmsg = "";
-						float kd = 0.0
-						string kd_string = "";
-						int kills = 0;
-						int deaths = 0;
-						string l_oid = "";
-						string l_name = "";
-						float l_wait = 0.0
+						string stringHandicap
+						string handicap
+						string p_input
+						string data
+						string inputmsg
+						float kd
+						string kd_string
+						int kills
+						int deaths
+						string l_oid
+						string l_name
+						float l_wait
 						
 						if ( param == "" )
 						{
-							Message( player, "Failed", " Command 'player' requires playername/oid as first param. ")
-							return true;
+							Message( player, "Failed", " Command 'player' requires playername/oid as first param. " )
+							return true
 						}
 							
-							try
-							{	
-								
-								if ( param.len() > 16 )
-								{
-									Message( player, "Failed", "Input exceeds char limit. ")
-									return true;
-								}
-								
-								entity l_player = GetPlayer( param )
-								
-								if ( !IsValid( l_player ) )
-								{
-									Message( player, "Failed", "Player: " + param + " - is invalid. ")
-									return true;
-								}			
-								
-								if ( Flowstate_IsLGDuels() )
-								{
-									handicap = l_player.p.p_damage == 2 ? "On" : "Off";
-									stringHandicap = "---- Handicap: " + handicap; 
-								}
-								
-								p_input = l_player.p.input > 0 ? "Controller" : "MnK"; 
-								kills = l_player.p.season_kills + player.GetPlayerNetInt( "kills" )
-								deaths = l_player.p.season_deaths + player.GetPlayerNetInt( "deaths" )
-								l_name = l_player.GetPlayerName()
-								l_oid = l_player.GetPlatformUID()
-								l_wait = l_player.p.IBMM_grace_period
-								inputmsg = "Player: " + l_name + " OID: " + l_oid;
-								
-								if (deaths > 0) 
-								{
-									kd = getkd( kills, deaths )
-								}
-								
-								data += "Season Kills: " + kills + " ---- Deaths: " + deaths + " ---- KD: " + kd + "\n"; 
-								data += "Input:  " + p_input + stringHandicap + "\n"; 
-								data += "wait time:  " + l_wait.tostring() + "\n"; 
-								data += GetScore(l_player) + "\n";
-								data += "Season playtime: " + PlayTime(l_player.p.season_playtime) + "\n";
-								data += "Season games: " + l_player.p.season_gamesplayed + "\n";
-								data += "Season score: " + l_player.p.season_score;
-								
-								if( (inputmsg.len() + data.len()) > 599 )
-								{
-									Message( player, "Failed", "Cannot execute this command currently due to return data resulting in overflow" )
-									return true;
-								}
-								
-								Message( player, inputmsg, data, 15);
-								
-							} 
-							catch (errlookup) 
+						try
+						{			
+							if ( param.len() > 16 )
 							{
-								Message(player, "Failed", "Command failed because of: \n\n " + errlookup )
-								return false
+								Message( player, "Failed", "Input exceeds char limit. " )
+								return true
 							}
 							
-							return true;
-		
+							entity l_player = GetPlayer( param )
+							
+							if ( !IsValid( l_player ) )
+							{
+								Message( player, "Failed", "Player: " + param + " - is invalid. " )
+								return true
+							}			
+							
+							if ( Flowstate_IsLGDuels() )
+							{
+								handicap = l_player.p.p_damage == 2 ? "On" : "Off"
+								stringHandicap = "---- Handicap: " + handicap 
+							}
+							
+							p_input = l_player.p.input > 0 ? "Controller" : "MnK" 
+							kills = l_player.p.season_kills + player.GetPlayerNetInt( "kills" )
+							deaths = l_player.p.season_deaths + player.GetPlayerNetInt( "deaths" )
+							l_name = l_player.GetPlayerName()
+							l_oid = l_player.GetPlatformUID()
+							l_wait = l_player.p.IBMM_grace_period
+							inputmsg = "Player: " + l_name + " OID: " + l_oid
+							
+							if ( deaths > 0 ) 
+								kd = getkd( kills, deaths )
+							
+							data += "Season Kills: " + kills + " ---- Deaths: " + deaths + " ---- KD: " + kd + "\n"
+							data += "Input:  " + p_input + stringHandicap + "\n"
+							data += "wait time:  " + l_wait.tostring() + "\n" 
+							data += GetScore(l_player) + "\n"
+							data += "Season playtime: " + PlayTimeFromSecondsString( l_player.p.season_playtime ) + "\n"
+							data += "Season games: " + l_player.p.season_gamesplayed + "\n"
+							data += "Season score: " + l_player.p.season_score
+							
+							if( ( inputmsg.len() + data.len() ) > 2800 )
+							{
+								Message( player, "Failed", "Cannot execute this command currently due to return data resulting in overflow" )
+								return true
+							}
+							
+							Message( player, inputmsg, data, 15 )
+							
+						} 
+						catch ( errlookup ) 
+						{
+							Message(player, "Failed", "Command failed because of: \n\n " + errlookup )
+							return false
+						}
+						
+						return true
 				
 				case "input":
-						
-						
+											
 						string handicap = ""
 						string p_input = ""					
 						string data = ""
@@ -230,13 +250,12 @@ struct {
 								handicap = active_player.p.p_damage == 2 ? "On" : "Off"
 								p_input = active_player.p.input > 0 ? "Controller" : "MnK"
 								data += "Player: " + active_player.GetPlayerName() + " is using: " + p_input + " ---- Handicap: " + handicap + "\n"
-							}
+							}				
 							
-							
-							if( ( inputmsg.len() + data.len()) > 599 )
+							if( ( inputmsg.len() + data.len()) > 2800 )
 							{
 								Message( player, "Failed", "Cannot execute this command currently due to return data resulting in overflow" )
-								return true;
+								return true
 							}
 							
 							Message( player, inputmsg, data, 20 )	
@@ -245,50 +264,43 @@ struct {
 						{
 							Message( player, "Failed", "Command failed because of: \n\n " + show_err )
 							return false			
-						}
+						}		
 						
-						
-						return true;
+						return true
 						
 				case "inputs":
 				
 						int controllerCount = 0;
-						int mnkCount = 0;
+						int mnkCount = 0
 						
 						foreach ( active_player in GetPlayerArray() )
 						{
 							if ( active_player.p.input == 0 )
-							{
-								mnkCount++;
-							}
+								mnkCount++
 							else if ( active_player.p.input == 1 )
-							{
-								controllerCount++;
-							}
+								controllerCount++
 						}
 						
-						string cplural = controllerCount > 1 || controllerCount == 0 ? "s" : "";
+						string cplural = controllerCount > 1 || controllerCount == 0 ? "s" : ""
 						string mplural = mnkCount > 1 || mnkCount == 0 ? "s" : "";
-						
 						
 						string countMsg = format("%d controller player%s \n %d mnk player%s", controllerCount, cplural, mnkCount, mplural );
 						Message( player, "There is currently", countMsg, 7 )
 						
-						return true;
+						return true
 						
 				case "stats":
 						
-						string data = "";
-						string inputmsg = bGlobalStats() ? "Current Player Global Stats" : "Current Player Round Stats";
+						string data = ""
+						string inputmsg = bGlobalStats() ? "Current Player Global Stats" : "Current Player Round Stats"
 						float kd = 0.0
-						string kd_string = "";
-						int kills = 0;
-						int deaths = 0;
-						string global_stats_msg = bGlobalStats() ? " Season Stats:" : " Current Round Stats:";
+						string kd_string = ""
+						int kills = 0
+						int deaths = 0
+						string global_stats_msg = bGlobalStats() ? " Season Stats:" : " Current Round Stats:"
 						
 						try 
-						{
-						
+						{				
 							foreach ( active_player in GetPlayerArray() )
 							{
 								kills = active_player.p.season_kills + player.GetPlayerNetInt( "kills" )
@@ -305,52 +317,44 @@ struct {
 							}
 							
 							
-							if( ( inputmsg.len() + data.len()) > 599 )
+							if( ( inputmsg.len() + data.len()) > 2800 )
 							{
 								Message( player, "Failed", "Cannot execute this command currently due to return data resulting in overflow" )
 								return true
 							}
 							
-							Message( player, inputmsg, data, 20 )
-						
+							Message( player, inputmsg, data, 20 )	
 						} 
 						catch ( show_err2 ) 
 						{
-		
 							Message( player, "Failed", "Command failed because of: \n\n " + show_err2 )
-							return false
-									
-						}
+							return false						
+						}		
 						
-						
-						return true;
+						return true
 						
 				case "aa":
 					
-						string data = "";
-						string inputmsg = "Server AA values:";
+						string data = ""
+						string inputmsg = "Server AA values:"
 						
 						try 
-						{
-							
-							data += format("\n Console Aim Assist: %.1f ", GetCurrentPlaylistVarFloat( "aimassist_magnet", 0.0 ) )
-							data += format("\n PC Aim Assist: %.1f", GetCurrentPlaylistVarFloat("aimassist_magnet_pc", 0.0 ) )
+						{			
+							data += format( "\n Console Aim Assist: %.1f ", GetCurrentPlaylistVarFloat( "aimassist_magnet", 0.0 ) )
+							data += format( "\n PC Aim Assist: %.1f", GetCurrentPlaylistVarFloat( "aimassist_magnet_pc", 0.0 ) )
 									
-							if( (inputmsg.len() + data.len()) > 599 )
+							if( ( inputmsg.len() + data.len() ) > 2800 )
 							{	
 								Message( player, "Failed", "Cannot execute this command currently due to return data resulting in overflow" )
 								return true		
 							}
 							
 							Message( player, inputmsg, data, 20 )
-						
 						} 
 						catch ( show_err3 ) 
-						{
-		
+						{	
 							Message( player, "Failed", "Command failed because of: \n\n " + show_err3 )
-							return false
-									
+							return false					
 						}
 						
 						return true
@@ -365,34 +369,32 @@ struct {
 					try 
 					{
 						
-						data += format("\n\n %s ", SQMatchID__internal() );
+						data += format("\n\n %s ", TrackerMatchID__internal() )
 								
-						if( (inputmsg.len() + data.len()) > 599 )
+						if( ( inputmsg.len() + data.len() ) > 2800 )
 						{	
 							Message( player, "Failed", "Cannot execute this command currently due to return data resulting in overflow" )
-							return true;		
+							return true		
 						}
 						
 						Message( player, inputmsg, data, 20 )
 					
-					} 
+					}
 					catch ( show_err4 ) 
 					{
-
 						Message( player, "Failed", "Command failed because of: \n\n " + show_err4 )
-						return false
-								
+						return false						
 					}
 					
 				#endif 
 				
-					return true;
+					return true
 
 					
 				default:
 					//sqprint ( "Usage: show argument \n" )
 					Message( player, "Failed: ", "Usage: show argument \n", 5 )
-					return true;
+					return true
 			}
 			
 			return false
@@ -400,19 +402,24 @@ struct {
 		
 		
 
-	void function INIT_CC_playeradmins()
-	{	
-		string admins_list = "";
-		string pair;
+	void function __PlayerAdminsInit()
+	{
+		if( !IsAuthEnabled() )
+			sqwarning( "WARNING: Client Command Admin is enabled but online auth is disabled" )
+	
+		file.adminsArray.resize( 0 )
+	
+		string admins_list
+		string pair
 		
 		#if TRACKER && HAS_TRACKER_DLL
-			admins_list = SQ_GetSetting__internal("settings.ADMINS")
+			admins_list = TrackerGetSettingString( "settings.ADMINS" )
 		#endif
 		
 		if( admins_list != "" )
 		{
 			#if DEVELOPER 
-				sqprint("Admins loaded from r5r_dev.json")
+				sqprint( "Admins loaded from r5r_dev.json" )
 			#endif
 		}
 		else 
@@ -420,1093 +427,1307 @@ struct {
 			admins_list = GetCurrentPlaylistVarString( "admins_list", "" )
 		}
 		
-		if ( empty( admins_list ) ){ return }
+		if ( empty( admins_list ) )
+			return
 		
-		AddCallback_OnClientConnected( CheckAdmin_OnConnect )
-		
-		try 
+		try
 		{
 			array<string> list = StringToArray( admins_list )
-		
-			foreach ( admin_pair in list )
-			{	
-				pair = admin_pair
-				array<string> a_format = split( admin_pair, "-")
-				player_admins[a_format[0]] <- a_format[1]
-				file.ADMINS.append(a_format[1])
-			}
 			
+			foreach ( admin_pair in list ) //backwards compat
+			{
+				pair = admin_pair			
+				if( admin_pair.find( "-" ) != -1 ) //todo: problematic backwards compat for usernames containing hyphen.
+				{
+					array<string> a_format = split( admin_pair, "-" )
+					file.adminsArray.append( a_format[ 1 ] )
+				}
+				else 
+					file.adminsArray.append( admin_pair ) //new format only uid
+			}
 		}
-		catch(erradmin)
+		catch( erradmin )
 		{
-			sqerror("Error with adminpair: " + pair + " Error: " + erradmin )
+			sqerror( "Error with adminpair:", pair, "Error:", erradmin )
 		}
-	
 	}
 	
 	array<string> function GetAdminList()
 	{
-		return file.ADMINS;
+		return file.adminsArray
 	}
-	
 
-	string function PlayTime( int iSeconds ) 
+	string function PlayTimeFromSecondsString( int iSeconds ) 
 	{	
 		float seconds = iSeconds.tofloat()
-		float hours =  seconds / 3600;
-		float minutes = (seconds % 3600) / 60;
-		float r_seconds = seconds % 60;
+		float hours =  seconds / 3600
+		float minutes = ( seconds % 3600 ) / 60
+		float r_seconds = seconds % 60
 		
-		string playtime = format("%d hours, %d minutes, %d seconds", hours, minutes, r_seconds);
-		return playtime;
+		string playtime = format( "%d hours, %d minutes, %d seconds", hours, minutes, r_seconds )
+		return playtime
 	}
 
 	//////////////////////////////////////////////////////////////////////////
 	//cc commands
 	bool function ClientCommand_mkos_admin( entity player, array<string> args )
 	{	
-		if ( !CheckRate( player ) ) 
-			return false
-		
-		string PlayerName = player.GetPlayerName()
 		string PlayerUID = player.GetPlatformUID()
-
-		if( !VerifyAdmin( PlayerName, PlayerUID ) )
+		bool bIsAdmin = IsServerAdmin( PlayerUID )
+		
+		if ( !bIsAdmin ) 
 			return false
 			
-		string command = "";
-		string param = "";
-		string param2 = "";
-		string param3 = "";
-		string param4 = "";
+		string command
+		string param
+		string param2
+		string param3
+		string param4
 		
-		if (args.len() > 0){
-			command = args[0];
-		}
-		
-		if (args.len() > 1){
-			param = args[1];
-		}
-		
-		if (args.len() > 2){
-			param2 = args[2];
-		}
-		
-		if (args.len() > 3){
-			param3 = args[3];
-		}
-		
-		if (args.len() > 4){
-			param4 = args[4];
-		}
+		if ( args.len() > 0 )
+			command = args[ 0 ]
+			
+		if ( args.len() > 1 )
+			param = args[ 1 ]
+			
+		if ( args.len() > 2 )
+			param2 = args[ 2 ]
+			
+		if ( args.len() > 3 )
+			param3 = args[ 3 ]
+			
+		if ( args.len() > 4 )
+			param4 = args[ 4 ]
 		
 		switch( command.tolower() )
-		{  
-			
-			case "help":	
-			
-			
-							try 
-							{
-								Message( player, "Commands:", "A command is entered as: \n\n cc command #param #param2.  \n\n cc kick #name/oid   - Kicks a player by name/oid \n cc afk #0/1   - disabled or enables afk to rest mode \n cc playself #audiofile   - Plays audiofile to self \n cc playall #audiofile    - Plays audiofile to all player \n cc sayall '#title' '#message' #duration   - says to all \n cc ban #name/oid #reason    - Bans a player \n cc unban #oid   - attempts to unban a player by OID \n cc map #name #mode   - reloads map \n cc playerinput #name/oid   - shows players input \n cc playerinfo  - some stats", 20 )
-							} 
-							catch (err) 
-							{ 
-								return false 
-							}
-					
-							return true
+		{
+			case "help":
+			{
+				const array<string> commandHelp = 
+				[
+					"\n\n\n\n\n\n\n\n\n\n\n\n\n\nA command is entered as:\n\n cc command #param #param2 ...\n\n",
+					"cc afk [0|1|true|false]   - disabled or enables afk to rest mode\n",
+					"cc kick [name|oid] [-r \"reason\"] [-say]  - Kicks a player by name/oid, optionally add -say to announce\n",
+					"cc timeout [name|oid] [true|false] [-r \"reason\"] [timestring] [-say]   - Times out the player. Optionally add -say to announce\n",
+					"cc gettimeout [name|oid]    - Returns data about a timeout\n",
+					"cc mute/unmute [name|oid] [-r \"[reason]\"] [timestring] [-say]    - Mutes / unmutes\n", 
+					"cc msg [name|oid] \"message\"    - Sends a PM to a player. A way to communicate with other admins\n",
+					"cc sayto [name|oid] [title] [msg] [dur]    - Sends a titled message to a specific player (duration defaults to ~3s if omitted)\n"
+					"cc sayall [#title] [#message] [duration]   - Broadcasts a titled message to all clients with a duration (seconds).\n",
+					"cc adminmsg [name|oid] \"message\"    - Sends an admin-branded message to a specific player\n",
+					"cc adminmsgall \"message\"    - Sends an admin-branded message to all players.\n",
+					"cc ban [name/oid] [-r \"[reason]\"] [-say]   - Bans a player. Optionally add -say to announce\n",
+					"cc unban [oid]   - attempts to unban a player by OID\n",
+					"cc map [name] [playlist] [gamemode]   - reloads map. partials match i.e. \"cc map comp\" will load mp_rr_arena_composite\n", 
+					"cc endround    - forces the round timer to end now\n",
+					"cc playerinput [name/oid]   - shows players input\n", 
+					"cc playerinfo  - some debug stats",
+					"\n\n For more commands, see https://docs.r5r.dev"
+				]
 				
-				
-			case "kick":	
-							if ( args.len() < 2 )
-							{
-								Message( player, "Failed", "kick requires name/id for 1st param of command" )
-								return false
-							}
-			
-							try 
-							{		
-								entity k_player
-								string k_playeroid
-								string k_playername
-								string reason = param2
-								
-								k_player = GetPlayer( param )
-								
-								if ( !IsValid( k_player ) )
-								{
-									Message( player, "Failed", "Player: " + param + " - is invalid. " )
-									return true
-								}
-									
-								k_playeroid = k_player.GetPlatformUID()	
-								k_playername = k_player.GetPlayerName()
-								
-								if ( IsTrackerAdmin( k_playeroid ) )
-								{
-									Message( player, "Cannot kick admin")
-									return true
-								}
-							
-								KickPlayerById( k_playeroid, reason )
-								UpdatePlayerCounts()
-								
-								Message( player, "Kicked player", "PUID: " + k_playeroid + "\nName: " + k_playername )
-								return true	
-							}
-							catch ( erraaarg )
-							{
-								Message( player, "Error", "Invalid player or argument missing" )
-								return true
-							}
-							
-							return true;			
-			case "afk":
-					
-							try {
-							
-								if ( args[1] == "1" )
-								{
-									SetAfkToRest( true )
-									Message( player, "Command sent", "Afk to rest was ENABLED" )
-									return true
-								} 
-								else if ( args[1] == "0" )
-								{
-									SetAfkToRest( false )
-									Message( player, "Command sent", "Afk to rest was disabled" )
-									return true
-								} 
-							} catch (erroreo){
-							
-								Message( player, "Error", "argument missing" )
-								return false
-							}
-							
-							return true
-							
-			case "restricted":
-			
-							try 
-							{
-							
-								if ( args[1] == "1" )
-								{
-									Tracker_SetRestrictedServer( true )
-									Message( player, "Command sent", "restricted_server was ENABLED" )
-									return true
-								} 
-								else if ( args[1] == "0" )
-								{
-									Tracker_SetRestrictedServer( false )
-									Message( player, "Command sent", "restricted_server was disabled" )
-									return true
-								} 
-							} 
-							catch (errorres)
-							{
-								Message( player, "Error", "argument missing" )
-								return false
-							}
-							
-							return true
-							
-			case "playonself": 
-			
-								
-							if ( args.len() < 2 )
-							{
-								Message( player, "Failed", "playself requires param of audiofile as string" )
-								return false
-							} 
-								
-							try 
-							{
-								EmitSoundOnEntity( player, args[1] )	
-							} 
-							catch ( erra )
-							{
-								Message(player, "Failed", "Command failed because of: \n\n " + erra )
-								return false	
-							}
-							
-							return true
-				
-				
-			case "playself": 
-			
-								
-							if ( args.len() < 2 )
-							{
-								Message( player, "Failed", "Command 'playself' requires param of audiofile as string" )
-								return false
-							} 
-								
-							try 
-							{
-								EmitSoundOnEntityOnlyToPlayer( player, player, args[1] )	
-							} 
-							catch ( erra )
-							{			
-								Message(player, "Failed", "Command failed because of: \n\n " + erra )
-								return false	
-							}
-							
-							return true
-							
-							
-			case "playall":
-						
-							
-							foreach (connected_player in GetPlayerArray())
-							{
-								try 
-								{
-									EmitSoundOnEntityOnlyToPlayer( connected_player, connected_player, args[1] )
-									return true		
-								} 
-								catch ( errb )
-								{	
-									Message(player, "Failed", "Command failed because of: \n\n " + errb )
-									return false	
-								}
-							
-							}
-
-							return true
-			
-							
-							
-			case "stopplayall":
-						
-							
-							foreach (connected_player in GetPlayerArray())
-							{					
-								try 
-								{
-									StopSoundOnEntity( connected_player, args[1] )
-									return true	
-								} 
-								catch ( errb )
-								{	
-									Message(player, "Failed", "Command failed because of: \n\n " + errb )
-									return false
-								}
-							}
-
-							return true
-							
-							
-					
-					
-			case "sayall": 
-					
-							if ( args.len() < 4 )
-							{	
-								Message( player, "Failed", "Command 'sayall' requires duration for third param of command as float" )
-								return false
-							} 
-							
-							foreach ( say_to_player in GetPlayerArray())
-							{
-								try	
-								{	
-									Message( say_to_player, param, param2, param3.tofloat())	
-								} 
-								catch ( errc ){
-								
-									Message(player, "Failed", "Command failed because of: \n\n " + errc )
-									return true
-								}
-							}
-							
-					return true
-							
-			case "sayto": 
+				try 
+				{
+					LocalMsg( player, "#FS_NULL", "#FS_NULL", eMsgUI.DEFAULT, 20, "Commands:", commandHelp.join( "" ) )
+				}
+				catch ( err ) 
+				{
+					sqerror( string( err ) )
+					return true 
+				}
 		
-							if ( param4 == "" || !IsNumeric( param4 ) )
-							{			
-								param4 = "3"		
-							} 	
-								try	
-								{	
-									entity to_player = GetPlayer(param)	
-									
-									if(IsValid(to_player))
-									{
-										Message( to_player, param2, param3, param4.tofloat())
-									}
-									else 
-									{
-										Message( player, "INVALID PLAYER")
-									}
-																	
-								} 
-								catch ( errst )
-								{	
-									Message(player, "Failed", "Command failed because of: \n\n " + errst )			
-								}
-
-							return true
-			case "ban":
-									
-							if ( args.len() < 2 )
-							{		
-								Message( player, "Failed", "Command 'ban' requires name/id for 1st param of command" )
-								return false
-							}			
-							
-							try 
-							{		
-								entity b_player;
-								string b_playeroid;
-								string b_reason = param2;	
-								
-								b_player = GetPlayer( param )
-							
-								if ( !IsValid( b_player ) )
-								{
-									Message( player, "Failed", "Player: " + param + " - is invalid. ")
-									return true;
-								}
-								
-								b_playeroid = b_player.GetPlatformUID()	
-									
-								
-								if ( IsTrackerAdmin( b_playeroid ) )
-								{
-									Message( player, "Cannot ban admin")
-									return true
-								}
-							
-								BanPlayerById( b_playeroid, b_reason )
-								UpdatePlayerCounts()
-								
-								Message( player, "Success", "Player: " + param + "\n\n was banned for: \n\n" + b_reason )
-								return true		
-							} 
-							catch ( erre )
-							{
-								Message(player, "Failed", "Command failed because of: \n\n " + erre )
-								return false
-							}
-							
-						return true;
-			
-			case "bansay":
-			
-						if ( args.len() < 2 )
-						{
-							Message( player, "Failed", "Command 'bansay' requires player for 1st param of command" )
-							return false
-						}
-						
-						args[0] = "ban"	
-						ResetRate( player )
-						entity target = GetPlayer( param )
-						
-						if( IsValid( target ) )
-						{
-							string targetName = target.GetPlayerName()
-							bool result = ClientCommand_mkos_admin( player, args )
-
-							if( result )
-							{
-								string msgHeader = format( "%s was BANNED for: ", targetName )
-								SendServerMessage( msgHeader + param2 )
-								foreach( s_player in GetPlayerArray() )
-									Message( s_player, msgHeader, param2, 10.0 )
-							}
-						}
-						else 
-						{
-							Message( player, "Invalid player: " + param )
-						}
-				break
+				return true
+			}
+			case "addbot":
+			{
+				if( param == "" )
+				{
+					Message( player, "Failed", "addbot requires name for 1st param of command" )
+					return true
+				}
 				
-			case "kicksay":
-			
-						if ( args.len() < 2 )
-						{
-							Message( player, "Failed", "Command 'kicksay' requires player for 1st param of command" )
-							return false
-						}
-						
-						args[0] = "kick"	
-						ResetRate( player )
-						entity target = GetPlayer( param )
-						
-						if( IsValid( target ) )
-						{
-							string targetName = target.GetPlayerName()
-							bool result = ClientCommand_mkos_admin( player, args )
-
-							if( result )
-							{
-								string msgHeader = format( "%s was kicked for: ", targetName )
-								SendServerMessage( msgHeader + param2 )
-								foreach( s_player in GetPlayerArray() )
-									Message( s_player, msgHeader, param2 )
-							}
-						}
-						else 
-						{
-							Message( player, "Invalid player: " + param )
-						}
-				break
-			
-			case "banid":
-			
-				#if TRACKER && HAS_TRACKER_DLL
+				if( param2 == "" )
+				{
+					Message( player, "Failed", "addbot requires team for 2nd param of command" )
+					return true
+				}
 				
-						if ( args.len() < 2 )
-						{
-							Message( player, "Failed", "Command 'banid' requires oid for 1st param of command")
-							return false
-						}	
+				if( !IsStringNumber( param2 ) )
+				{
+					Message( player, "Failed", "addbot requires team as number for 2nd param of command" )
+					return true
+				}
+				
+				int calc = param2.tointeger()
+				if( ( calc > 129 || calc < 0 ) && calc != -1 )
+				{
+					Message( player, "Invalid team. Must be >= -1 and < 129" )
+					return true
+				}
+				
+				__ServerCommand( format( "sv_addbot %s %s", param, param2 ) )
+				Message( player, format( "Bot '%s' created on team '%s'", param, param2 ) )
+				
+				return true
+			}
+			case "kick":
+			{
+				if ( args.len() < 2 )
+				{
+					Message( player, "Failed", "kick requires name/id for 1st param of command" )
+					return true
+				}
 
-							try 
-							{
-								if ( IsTrackerAdmin( param ) )
-								{		
-									Message( player, "Failed", param + " is an admin. Ban rejected.", 10 )
-									return false		
-								}
-								
-								if ( !IsNum( param ) )
-								{			
-									Message( player, "Failed", param + " is not a valid oid format.", 10 )
-									return false	
-								}
-								
-								if ( param2 == "" )
-								{		
-									param2 = "0";							
-								}
-								
-								entity playerToBan = GetPlayerEntityByUID( param )
-								
-								if( IsValid( playerToBan ) )
-								{
-									BanPlayerById( param, param3 )
-									Message( player, "Success", param + " was added to the banlist and removed from the server.", 10 )
-									
-									return true
-								}
-								
-								if ( AddBanByID( param2, param ) )
-								{					
-									Message( player, "Success", param + " was added to the banlist.", 10 )
-									return true	
-								}
-								else 
-								{	
-									Message( player, "Failed", "Failed to add player oid: " + param + " to the banlist.", 10 )
-									return true		
-								}
-								
-							} 
-							catch ( errbanid )
-							{
-								Message(player, "Failed", "Command failed because of: \n\n " + errbanid )
-								return false
-							}
-							
-					#endif 
+				try 
+				{		
+					entity kickPlayer
+					string kickPlayerUid
+					string kickPlayerName
+					string reason = Chat_FindReasonInArgs( args )
+					
+					kickPlayer = GetPlayer( param )
+					
+					if ( !IsValid( kickPlayer ) )
+					{
+						Message( player, "Failed", format( "Player: '%s' is invalid. ", param ) )
 						return true
+					}
 					
-			case "unban":				
+					if( kickPlayer.IsBot() )
+					{
+						string botName = kickPlayer.GetPlayerName()
+						__ServerCommand( format( "kick %s", botName ) )
+						
+						Message( player, format( "Bot player %s was kicked", botName ) )
+						return true
+					}
+						
+					kickPlayerUid = kickPlayer.GetPlatformUID()	
+					kickPlayerName = kickPlayer.GetPlayerName()
 					
-						if ( args.len() < 2 )
-						{		
-							Message( player, "Failed", "Command 'unban' requires id for 1st param of command as string" )
-							return false	
-						}
-						
-						try 
-						{
-							UnbanPlayer( args[1] )					
-							Message( player, "Success", "ID: " + args[1] + " was supposedly unbanned" )				
-							return true
-								
-						} 
-						catch ( erre )
-						{	
-							Message(player, "Failed", "Command failed because of: \n\n " + erre )
-							return false
-						}
-						
-						return true;
-								
-			case "playerinfo":
-			
-						try 
-						{				
-							string nputmsg = "Current Stats:"
-							
-							string info = Tracker_BuildAllPlayerMetrics( true )
-							
-							if( (nputmsg.len() + info.len()) > 599 )
-							{
-								Message( player, "Failed", "Cannot execute this command currently due to return data resulting in overflow" )
-								return true;
-							}
-							
-							Message( player, nputmsg, LineBreak(info), 20);
-							return true;	
-						} 
-						catch (errf)
-						{	
-							Message( player, "Failed", "Command failed because of: \n\n " + errf )
-							return false;
-						}
-						
-			//for testing
-			case "playerinput":
-						
-						if ( args.len() < 1)
-						{	
-							Message( player, "Failed", "Param 1 of command 'playerinput' requires player name/oid.")
-							return true		
-						}
-						
-						try 
-						{		
-							entity a_player;
-							string mode;
-							
-							a_player = GetPlayer( param )
-							
-							if ( !IsValid( a_player ) )
-							{	
-								Message( player, "Failed", "Player: " + param + " -- is invalid" );
-								return true
-							}
-							
-							mode = a_player.p.input == 0 ? "Mouse and keyboard" : "Controller";
-							
-							Message( player, "Success: ", "Current inputmode: " + mode );
-							return true
-							
-						} 
-						catch (errh) 
-						{		
-							Message( player, "Failed", "Command failed because of: \n\n " + errh )
-							return true		
-						}
+					if ( IsServerAdmin( kickPlayerUid ) )
+					{
+						Message( player, "Cannot kick admin")
+						return true
+					}
+				
+					KickPlayerById( kickPlayerUid, reason )
+					UpdatePlayerCounts()
 					
+					Message( player, "Kicked player", format( "PUID: '%s'\nName: '%s'", kickPlayerUid, kickPlayerName ) )
+					
+					if( args.contains( "-say" ) )
+					{
+						string msgHeader = format( "%s was kicked for: ", kickPlayerName )
+						BroadcastResponse( msgHeader + reason, true )
+						foreach( s_player in GetPlayerArray() )
+							Message( s_player, msgHeader, reason )
+					}
+					
+					return true	
+				}
+				catch ( erraaarg )
+				{
+					Message( player, "Error", "Invalid player or argument missing" )
 					return true
-		
-						
-			case "input":	
+				}
+				
+				return true	
+			}	
+			case "afk":
+			{
+				if( !IsStringBool( param ) )
+				{
+					Message( player, "Param 1 of command 'afk' requires bool. [0|1|true|false]" )
+					return true
+				}
+				
+				if ( StringToBool( param ) )
+				{
+					SetAfkToRest( true )
+					Message( player, "Command sent", "Afk to rest was ENABLED" )
+					return true
+				}
 
-						if ( args.len() < 1)
-						{		
-							Message( player, "Failed", "Param 1 of command 'input' requires player name/oid.")
-							return true		
-						}
-						
-						
-						if ( args.len() < 2)
-						{	
-							Message( player, "Failed", "Param 2 of command 'input' requires type 0/1.")
-							return true		
-						}
-								
-						try 
-						{	
-							string str = args[2]
-							string a_str = str;
-							
-							if (str == "false"){ a_str = "0" }
-							if (str == "true"){ a_str = "1" }
-							if (str == "mnk" ){ a_str = "0" }
-							if (str == "controller" ) { a_str = "1" }
-							
-							if ( !Is_Bool(a_str) )
-							{	
-								Message( player, "Failed", "Incorrect usage, setting input using: " + a_str )
-								return false	
-							}
-							
-							entity selectPlayer =  GetPlayer( param )
-							
-							if ( !IsValid( selectPlayer ) )
-							{
-								Message( player, "Failed", "Player: " + param + " - is invalid. ")
-								return true
-							}
-							
-							const array<string> inputs =[ "MnK", "Controller" ]
-							int currentInput = selectPlayer.p.input
-							int newInput = a_str.tointeger()
-							string sayInput = newInput > 0 ? inputs[ 1 ] : inputs [ 0 ] 
-							
-							if( newInput != currentInput )
-							{
-								selectPlayer.p.input = newInput							
-								selectPlayer.Signal( "InputChanged" )						
-								Message( player, "Success", "Player " + selectPlayer.GetPlayerName() + "  was changed to input: " + sayInput  )
-								return true
-							}
-							else 
-							{
-								Message( player, "Failed", "Player is already input type: " + sayInput )
-							}
-						
-						} 
-						catch( errj ) 
-						{		
-							Message( player, "Failed", "Command failed because of: \n\n " + errj )
-							return false
-						}
-						
-			case "listhandles":
-						
-						try 
-						{
-							string statement = "\n ";
-							
-							foreach ( list_player in GetPlayerArray() )
-							{
-								int handle = list_player.GetEncodedEHandle()
-								string p_name = list_player.GetPlayerName()
-								
-								statement += " Player: " + p_name + "   Handle: " + handle + "\n";	
-							}
-							
-							sqprint(statement);
-							Message( player, "Handles:", statement, 20)
-							
-							return true;
-						
-						} 
-						catch (errk) 
-						{
-							Message( player, "Failed", "Command failed because of: \n\n " + errk )
-							return true;		
-						}
-						
-					return true
-						
-			case "map":
-					
-						if( GetPlaylistMaps( GetMode(param2) ).contains( GetMap(param) ) )
-						{
-							GameRules_ChangeMap( GetMap(param) , GetMode(param2) )
-						}
-						else 
-						{	
-							Message( player, "MAP NOT IN PLAYLIST" )
-							sqerror("Map not in playlist - rejecting load")
-						}
-						
-					return true
-					
-			case "score":
+				SetAfkToRest( false )
+				Message( player, "Command sent", "Afk to rest was disabled" )
 			
-						if ( args.len() < 1)
-						{		
-							Message( player, "Info", "Param 1 of command 'score' requires player name/oid/*/current/season/difference. \n\n Usage: score player | score * | score current")
-							return true			
-						}
-						
-						if ( param == "current" )
-						{	
-							Message( player, "Success", "'Current KD' server weight setting is:   " + getSbmmSetting( "current_kd_weight" ) )
+				return true
+			}		
+			case "restricted":
+			{
+				if( !IsStringBool( param ) )
+				{
+					Message( player, "Param 1 of command 'restricted' requires bool. [0|1|true|false]" )
+					return true
+				}
+				
+				if ( StringToBool( param ) )
+				{
+					Tracker_SetRestrictedServer( true )
+					Message( player, "Command sent", "restricted_server was ENABLED" )		
+					return true
+				}
+
+				Tracker_SetRestrictedServer( false )
+				Message( player, "Command sent", "restricted_server was disabled" )
+
+				return true
+			}
+			case "playonself": 
+			{
+				if ( args.len() < 2 )
+				{
+					Message( player, "Failed", "playself requires param of audiofile as string" )
+					return true
+				} 
+					
+				try 
+				{
+					EmitSoundOnEntity( player, args[1] )	
+				} 
+				catch ( erra )
+				{
+					Message(player, "Failed", "Command failed because of: \n\n " + erra )
+					return true	
+				}
+				
+				return true
+			}
+			case "playself": 
+			{
+				if ( args.len() < 2 )
+				{
+					Message( player, "Failed", "Command 'playself' requires param of audiofile as string" )
+					return true
+				} 
+					
+				try 
+				{
+					EmitSoundOnEntityOnlyToPlayer( player, player, args[1] )	
+				} 
+				catch ( erra )
+				{			
+					Message(player, "Failed", "Command failed because of: \n\n " + erra )
+					return true	
+				}
+				
+				return true
+			}		
+			case "playall":
+			{						
+				foreach ( connected_player in GetPlayerArray() )
+				{
+					try 
+					{
+						EmitSoundOnEntityOnlyToPlayer( connected_player, connected_player, args[1] )
+						return true		
+					} 
+					catch ( errb )
+					{	
+						Message(player, "Failed", "Command failed because of: \n\n " + errb )
+						return true	
+					}
+				}
+
+				return true
+			}			
+			case "stopplayall":
+			{		
+				foreach ( connected_player in GetPlayerArray() )
+				{					
+					try 
+					{
+						StopSoundOnEntity( connected_player, args[1] )
+						return true	
+					} 
+					catch ( errb )
+					{	
+						Message(player, "Failed", "Command failed because of: \n\n " + errb )
+						return true
+					}
+				}
+
+				return true
+			}				
+			case "sayall": 
+			{	
+				if ( args.len() < 4 )
+				{	
+					Message( player, "Failed", "Command 'sayall' requires duration for third param of command as float" )
+					return true
+				} 
+				
+				foreach ( say_to_player in GetPlayerArray() )
+				{
+					try	
+					{	
+						Message( say_to_player, param, param2, param3.tofloat() )	
+					} 
+					catch ( errc )
+					{		
+						Message( player, "Failed", "Command failed because of: \n\n " + errc )
+						return true
+					}
+				}
+							
+				return true
+			}		
+			case "sayto": 
+			{
+				if ( param4 == "" || !IsStringNumeric( param4 ) )		
+					param4 = "3"		
+					
+				if( param3 != "" && param2 == "" )
+					param2 = " "
+					
+				try
+				{
+					entity to_player = GetPlayer(param)	
+					
+					if( IsValid( to_player ) )
+						Message( to_player, param2, param3, param4.tofloat() )
+					else 
+						Message( player, "INVALID PLAYER")
+													
+				} 
+				catch ( errst )
+				{	
+					Message( player, "Failed", "Command failed because of: \n\n " + errst )			
+				}
+
+				return true
+			}
+			case "ban":
+			{				
+				if ( args.len() < 2 )
+				{		
+					Message( player, "Failed", "Command 'ban' requires name/id for 1st param of command" )
+					return true
+				}			
+				
+				try 
+				{
+					entity banPlayer
+					string banPlayerUID
+					string banPlayerName
+					string banReason = Chat_FindReasonInArgs( args )	
+					
+					banPlayer = GetPlayer( param )
+				
+					if ( !IsValid( banPlayer ) )
+					{
+						Message( player, "Failed", "Player: " + param + " - is invalid. " )
+						return true
+					}
+					
+					banPlayerName = banPlayer.GetPlayerName()
+					banPlayerUID = banPlayer.GetPlatformUID()			
+					
+					if ( IsServerAdmin( banPlayerUID ) )
+					{
+						Message( player, format( "Cannot ban admin %s", banPlayerName ) )
+						return true
+					}
+				
+					#if HAS_TRACKER_DLL
+						// if( args.contains( "-id" ) )
+							// BanPlayerByIdOnly( banPlayerUID, banReason, player.GetPlatformUID() ) //not released yet.
+						// else
+							BanPlayerById( banPlayerUID, banReason, player.GetPlatformUID() )
+					#else
+						BanPlayerById( banPlayerUID, banReason )
+					#endif
+					
+					UpdatePlayerCounts()
+					
+					Message( player, "Success", format( "Player: %s\n\n was banned for: \n\n%s", banPlayerName, banReason ) )
+					
+					if( args.contains( "-say" ) )
+					{
+						string msgHeader = format( "%s was BANNED for: ", banPlayerName )
+						SendServerMessage( msgHeader + banReason )
+						foreach( s_player in GetPlayerArray() )
+							Message( s_player, msgHeader, banReason, 10.0 )
+					}
+					
+					return true		
+				} 
+				catch ( erre )
+				{
+					Message( player, "Failed", "Command failed because of: \n\n " + erre )
+					return true
+				}
+					
+				return true
+			}
+			case "banid":
+			{
+				#if HAS_TRACKER_DLL
+					if ( args.len() < 2 )
+					{
+						Message( player, "Failed", "Command 'banid' requires oid for 1st param of command")
+						return true
+					}	
+
+					try 
+					{
+						if ( IsServerAdmin( param ) )
+						{
+							Message( player, "Failed", param + " is an admin. Ban rejected.", 10 )
 							return true		
 						}
-						else if ( param == "season" )
-						{	
-							Message( player, "Success", "'season KD' server weight setting is:   " + getSbmmSetting( "season_kd_weight" ) )
-							return true
-						}
-						else if ( param == "difference" )
-						{	
-							Message( player, "Success", "'KD matchmaking difference' server setting is:   " + getSbmmSetting( "SBMM_kd_difference" ) )
-							return true
-						}
-					
-						if ( param == "*")
+						
+						if ( !IsStringNumber( param ) )
 						{			
-							try 
-							{
-								string putmsg = "Success";
-								string s_data;
-								
-								foreach ( score_player in GetPlayerArray() )
-								{
-									if ( !IsValid( score_player ) ) continue
-									
-									s_data += GetScore( score_player ) + "\n";
-								}
-								
-								if( ( putmsg.len() + s_data.len() ) > 599 )
-								{	
-									Message( player, "Failed", "Cannot execute this command currently due to return data resulting in overflow" )
-									return true;
-								}
-							
-								Message( player, putmsg, s_data, 20 );
-							
-							}
-							catch (errallscore) 
-							{
-								Message( player, "Failed", "Command failed because of: \n\n " + errallscore )
-								return true;
-							}
-						
-						}
-						else
-						{
-							entity s_player;
-									
-							s_player = GetPlayer( param )
-							
-							if ( !IsValid( s_player ) )
-							{	
-								Message( player, "Failed", "Player: " + param + " -- is invalid" );
-								return true
-							}
-							
-							try 
-							{
-								Message( player, "Success", GetScore( s_player ) );		
-							} 
-							catch (errscore) 
-							{
-								Message( player, "Failed", "Command failed because of: \n\n " + errscore )
-								return true;			
-							}
-						
-						}
-						
-					return true
-					
-			case "scoreconfig":
-			
-						if ( args.len() < 2)
-						{
-							Message( player, "Failed", "Param 1 of command 'scoreconfig' requires type: current/season/difference.")
-							return true
-						}
-						
-						if ( args.len() < 3)
-						{	
-							Message( player, "Failed", "Param 2 of command 'scoreconfig' requires float")
+							Message( player, "Failed", param + " is not a valid oid format.", 10 )
 							return true	
 						}
 						
+						string reason = Chat_FindReasonInArgs( args )
+						entity playerToBan = GetPlayerEntityByUID( param )
 						
-						
-						try 
-						{			
-							if ( !IsFloat( param2 ) )
-							{
-								Message( player, "Failed", "param 3 of command 'scoreconfig' must be numeric type float, \n\n example: 0.8 --            '" + param2 + "' was provided" )
-								return true
-							}
-							
-							if ( param == "current" )
-							{	
-								setSbmmSetting( "current_kd_weight", param2.tofloat() )		
-							}
-							else if ( param == "season" )
-							{		
-								setSbmmSetting( "season_kd_weight", param2.tofloat() )				
-							}
-							else if ( param == "difference" )
-							{	
-								setSbmmSetting( "SBMM_kd_difference", param2.tofloat() )	
-							}
-							else
-							{
-								Message( player, "Failed", "Invalid scoreconfig type: " + param )
-								return true
-							}	
-							
-							Message( player, "Success", "Weight for " + param + " KD -- was set to: " + param2 , 5 );
-						
-						} 
-						catch (errsetweight) 
+						if( IsValid( playerToBan ) )
 						{
-							Message( player, "Failed", "Command failed because of: \n\n " + errsetweight )
-							return true;			
+							BanPlayerById( param, reason, player.GetPlatformUID() )
+							Message( player, "Success", param + " was added to the banlist and removed from the server.", 10 )
+							return true
 						}
+							
+						Message( player, "Attempting banlist edit", format( "For user: [%s] with reason: \"%s\"", param, reason ), 10 )
+						AddBanByID( param, reason, player.GetPlatformUID() )
 						
+						return true				
+					}
+					catch ( errbanid )
+					{
+						Message(player, "Failed", "Command failed because of: \n\n " + errbanid )
+						return true
+					}
+				#endif // TRACKER && HAS_TRACKER_DLL
+				
+				return true
+			}
+			case "unban":				
+			{
+				if ( args.len() < 2 )
+				{		
+					Message( player, "Failed", "Command 'unban' requires id for 1st param of command as string" )
+					return true	
+				}
+				
+				try 
+				{
+					UnbanPlayer( args[1] )					
+					Message( player, "Success", "ID: " + args[1] + " was supposedly unbanned" )				
+					return true
+						
+				} 
+				catch ( erre )
+				{	
+					Message(player, "Failed", "Command failed because of: \n\n " + erre )
+					return true
+				}
+				
+				return true
+			}				
+			case "playerinfo":
+			{
+				try 
+				{				
+					string nputmsg = "Current Stats:"
+					
+					string info = Tracker_BuildAllPlayerMetrics( true )
+					
+					if( ( nputmsg.len() + info.len()) > 2800 )
+					{
+						Message( player, "Failed", "Cannot execute this command currently due to return data resulting in overflow" )
+						return true
+					}
+					
+					Message( player, nputmsg, LineBreak( info ), 20 )
+					return true	
+				} 
+				catch ( errf )
+				{	
+					Message( player, "Failed", "Command failed because of: \n\n " + errf )
+					return true
+				}
+			}
+			//for testing
+			case "playerinput":
+			{		
+				if ( args.len() < 1)
+				{	
+					Message( player, "Failed", "Param 1 of command 'playerinput' requires player name/oid." )
+					return true		
+				}
+				
+				try
+				{		
+					entity a_player
+					string mode
+					
+					a_player = GetPlayer( param )
+					
+					if ( !IsValid( a_player ) )
+					{	
+						Message( player, "Failed", "Player: " + param + " -- is invalid" );
+						return true
+					}
+					
+					mode = a_player.p.input == 0 ? "Mouse and keyboard" : "Controller";
+					
+					Message( player, "Success: ", "Current inputmode: " + mode )
 					return true
 					
+				} 
+				catch ( errh ) 
+				{		
+					Message( player, "Failed", "Command failed because of: \n\n " + errh )
+					return true		
+				}
+			
+				return true
+			}		
+			case "input":	
+			{
+#if DEVELOPER			
+				if ( args.len() < 1)
+				{		
+					Message( player, "Failed", "Param 1 of command 'input' requires player name/oid.")
+					return true		
+				}
+				
+				if ( args.len() < 2)
+				{	
+					Message( player, "Failed", "Param 2 of command 'input' requires type 0/1.")
+					return true		
+				}
+						
+				try 
+				{	
+					string str = args[2]
+					string a_str = str
+					
+					if ( str == "mnk" ){ a_str = "0" }
+					if ( str == "controller" ){ a_str = "1" }
+					
+					if ( !IsStringBool( a_str ) )
+					{	
+						Message( player, "Failed", "Incorrect usage, setting input using: " + a_str )
+						return true	
+					}
+					
+					bool newInputBool = StringToBool( a_str )
+					entity selectPlayer =  GetPlayer( param )
+					
+					if ( !IsValid( selectPlayer ) )
+					{
+						Message( player, "Failed", "Player: " + param + " - is invalid. " )
+						return true
+					}
+					
+					const array<string> inputs = [ "MnK", "Controller" ]
+					int currentInput = selectPlayer.p.input
+					int newInput = newInputBool.tointeger()
+					string sayInput = newInput > 0 ? inputs[ 1 ] : inputs [ 0 ] 
+					
+					if( newInput != currentInput )
+					{
+						selectPlayer.p.input = newInput							
+						selectPlayer.Signal( "InputChanged" )						
+						Message( player, "Success", "Player " + selectPlayer.GetPlayerName() + "  was changed to input: " + sayInput  )
+						return true
+					}
+					else 
+					{
+						Message( player, "Failed", "Player is already input type: " + sayInput )
+					}		
+				} 
+				catch( errj ) 
+				{		
+					Message( player, "Failed", "Command failed because of: \n\n " + errj )
+					return true
+				}
+#endif 
+				return true
+			}		
+			case "listhandles":
+			{
+				try 
+				{
+					string statement = "\n "
+					
+					foreach ( list_player in GetPlayerArray() )
+					{
+						int handle = list_player.GetEncodedEHandle()
+						string p_name = list_player.GetPlayerName()
+						
+						statement += " Player: " + p_name + "   Handle: " + handle + "\n"
+					}
+					
+					sqprint( statement )
+					Message( player, "Handles:", statement, 20 )
+					
+					return true
+				
+				} 
+				catch ( errk ) 
+				{
+					Message( player, "Failed", "Command failed because of: \n\n " + errk )
+					return true		
+				}
+				
+				return true
+			}		
+			case "map":
+			{
+				string map
+				
+				if( param == "" )
+					map = GetMapName()
+				else 
+					map = FindMap( param )
+				
+				if( map == "" )
+				{
+					Message( player, "Map not found:", format( "Could not find map with \"%s\" in it`s name", param ) )
+					sqerror( "Map not found:", param )
+					return true
+				}
+				
+				string playlist = GetCurrentPlaylistName()
+				string errorMsg
+				bool bIsPlaylistValid
+						
+				if( param2 != "" )
+				{
+					playlist = FindPlaylistName( param2 )
+				
+					if( playlist == "" )
+						errorMsg = format( "Could not find a valid playlist via partial matching for criteria '%s'", param2 )
+					else if( !GetPlaylistMaps( playlist ).contains( map ) )
+						errorMsg = format( "Map '%s' not in playlist '%s' - rejecting cc map load", map, playlist )
+
+					if( errorMsg != "" )
+					{
+						Message( player, "ERROR", errorMsg )
+						sqerror( errorMsg )
+						
+						return true
+					}
+					
+					string actionKey = "playlist_max_players"
+					int requestedPlaylistMaxPlayers = GetMaxPlayersForPlaylistName( playlist )
+					int currentConnectedPlayerCount = GetConnectedPlayerCount()
+					
+					if( !__AdminHasConfirmedAction( player, actionKey ) && requestedPlaylistMaxPlayers < currentConnectedPlayerCount )
+					{
+						int lostPlayers = currentConnectedPlayerCount - requestedPlaylistMaxPlayers
+						string confirmMessage = format
+						( 
+							"The requested map change for map: '%s', Playlist: '%s' will lose some players.\nCurrent Player Count: %d\nMax Players for new playlist: %d\n[%d] players will not get in.\n\nIf this is acceptable, enter 'cc confirm' to proceed",
+							map,
+							playlist,
+							currentConnectedPlayerCount,
+							requestedPlaylistMaxPlayers,
+							lostPlayers,	
+							actionKey
+						)
+						
+						string action = args.join( " " )
+						AdminNeedsConfirmAction( player, actionKey, action )
+						Message( player, "Notice:", confirmMessage )
+						
+						return true
+					}
+					
+					bIsPlaylistValid = true
+				}
+				
+				string gamemode = GameRules_GetGameMode()
+				if( param3 != "" )
+				{
+					gamemode = FindModeName( param3 )
+					if( gamemode == "" )
+					{
+						errorMsg = format( "Could not match '%s' to a gamemode", param3 )
+						Message( player, errorMsg )
+						sqerror( errorMsg )
+						return true
+					}
+				}
+					
+				if( !DoesPlaylistSupportGamemode( playlist, gamemode ) )
+				{
+					errorMsg = format( "Playlist '%s' does not support gamemode '%s'", playlist, gamemode )
+					Message( player, "Error:", errorMsg )
+					sqerror( errorMsg )
+					
+					return true 
+				}
+				
+				if( bIsPlaylistValid )
+					Dev_CommandLineAddParm( "playlistOverride", playlist )
+				
+				printf( "Admin '%s' Changing to map: %s, Gamemode: %s, playlist: %s", player.GetPlatformUID(), map, gamemode, playlist != "" ? playlist : GetCurrentPlaylistName() )
+				GameRules_ChangeMap( map, gamemode )
+					
+				return true
+			}
+			case "confirm":
+			{
+				array< string > storedCmdArgs = GetStoredAdminCommand( player )
+				
+				if( !storedCmdArgs.len() )
+				{
+					Message( player, "Invalid action", "No action was stored for confirm." )
+					return true
+				}
+				
+				Message( player, "Success", format( "Running command: %s", storedCmdArgs.join( " " ) ) )
+				
+				thread void function() : ( player, storedCmdArgs )
+				{
+					if( !IsValid( player ) )
+						return 
+						
+					player.Signal( "ConfirmAction" )
+					player.EndSignal( "ConfirmAction", "OnDestroy", "OnDisconnected" )
+				
+					wait 3
+					
+					ClientCommand_mkos_admin( player, storedCmdArgs )
+				}()
+						
+				return true
+			}
+			case "playlist":
+			{
+				string playlistOverride = Dev_CommandLineParmValue( "playlistOverride" )
+				
+				string playlistConfig = format
+				(
+					"Active Playlist: %s\nActive Gamemode: %s\nActive Playlist Override:%s",
+					GetCurrentPlaylistName(),
+					GameRules_GetGameMode(),
+					playlistOverride != "" ? playlistOverride : "{none}"
+				)
+				
+				Message( player, "Current playlist config:", playlistConfig )
+				return true
+			}
+			case "score":
+			{
+				if ( args.len() < 1 )
+				{		
+					Message( player, "Info", "Param 1 of command 'score' requires player name/oid/*/current/season/difference. \n\n Usage: score player | score * | score current")
+					return true			
+				}
+				
+				if ( param == "current" )
+				{	
+					Message( player, "Success", "'Current KD' server weight setting is:   " + getSbmmSetting( "current_kd_weight" ) )
+					return true		
+				}
+				else if ( param == "season" )
+				{	
+					Message( player, "Success", "'season KD' server weight setting is:   " + getSbmmSetting( "season_kd_weight" ) )
+					return true
+				}
+				else if ( param == "difference" )
+				{	
+					Message( player, "Success", "'KD matchmaking difference' server setting is:   " + getSbmmSetting( "SBMM_kd_difference" ) )
+					return true
+				}
+			
+				if ( param == "*" )
+				{			
+					try 
+					{
+						string putmsg = "Success"
+						string s_data
+						
+						foreach ( score_player in GetPlayerArray() )
+						{
+							if ( !IsValid( score_player ) ) continue
+							
+							s_data += GetScore( score_player ) + "\n"
+						}
+						
+						if( ( putmsg.len() + s_data.len() ) > 2800 )
+						{
+							Message( player, "Failed", "Cannot execute this command currently due to return data resulting in overflow" )
+							return true
+						}
+					
+						Message( player, putmsg, s_data, 20 )
+					
+					}
+					catch ( errallscore ) 
+					{
+						Message( player, "Failed", "Command failed because of: \n\n " + errallscore )
+						return true
+					}
+				}
+				else
+				{
+					entity s_player = GetPlayer( param )
+					
+					if ( !IsValid( s_player ) )
+					{	
+						Message( player, "Failed", "Player: " + param + " -- is invalid" )
+						return true
+					}
+					
+					try 
+					{
+						Message( player, "Success", GetScore( s_player ) )	
+					} 
+					catch ( errscore ) 
+					{
+						Message( player, "Failed", "Command failed because of: \n\n " + errscore )
+						return true			
+					}
+				
+				}
+				
+				return true
+			}
+			case "scoreconfig":
+			{
+				if ( args.len() < 2 )
+				{
+					Message( player, "Failed", "Param 1 of command 'scoreconfig' requires type: current/season/difference." )
+					return true
+				}
+				
+				if ( args.len() < 3 )
+				{	
+					Message( player, "Failed", "Param 2 of command 'scoreconfig' requires float" )
+					return true	
+				}
+				
+				try 
+				{			
+					if ( !IsStringFloat( param2 ) )
+					{
+						Message( player, "Failed", "param 3 of command 'scoreconfig' must be numeric type float, \n\n example: 0.8 --            '" + param2 + "' was provided" )
+						return true
+					}
+					
+					if ( param == "current" )
+					{	
+						setSbmmSetting( "current_kd_weight", param2.tofloat() )		
+					}
+					else if ( param == "season" )
+					{		
+						setSbmmSetting( "season_kd_weight", param2.tofloat() )				
+					}
+					else if ( param == "difference" )
+					{	
+						setSbmmSetting( "SBMM_kd_difference", param2.tofloat() )	
+					}
+					else
+					{
+						Message( player, "Failed", "Invalid scoreconfig type: " + param )
+						return true
+					}	
+					
+					Message( player, "Success", "Weight for " + param + " KD -- was set to: " + param2 , 5 )
+				
+				} 
+				catch ( errsetweight ) 
+				{
+					Message( player, "Failed", "Command failed because of: \n\n " + errsetweight )
+					return true;			
+				}
+				
+				return true
+			}
 			case "cleanuplogs":
-				
-					#if TRACKER && HAS_TRACKER_DLL	
-						CleanupLogs__internal()
-					#endif
-							
-						return true
-			
+			{
+				#if TRACKER && HAS_TRACKER_DLL	
+					TrackerCleanupLogs__internal()
+					Message( player, "Success", "Internal logs cleanup process ran" )
+					return true
+				#endif
+						
+				return false
+			}
 			case "reload_config":
-			
-					#if TRACKER && HAS_TRACKER_DLL	
-						SQ_ReloadConfig__internal()
-					#endif
+			{
+				#if TRACKER && HAS_TRACKER_DLL	
+					TrackerReloadConfig__internal()
+					Message( player, "Success", "r5rdev_config.json was reloaded" )
+					return true
+				#endif
 						
-						return true
-						
+				return false
+			}
 			case "setting":
-						
-					#if TRACKER && HAS_TRACKER_DLL	
-					
-						if ( args.len() < 2)
-						{
-							Message( player, "Failed", "Param 1 of command 'setting' requires key name")
-							return true
-						}
-						
-						
-						try 
-						{	
-							string return_str = "";
-							return_str = SQ_GetSetting__internal(param);	
-							
-							Message( player, param + ":", return_str)
-							return true
-						} 
-						catch (errset) 
-						{
-							
-							Message( player, "Failed", "Command failed because of: \n\n " + errset )
-							return true		
-						}
-					
-					#endif
-						
-					break;
-					
-			case "spamupdate":
-			case "spam":
-					
-					file.stop_update_msg_flag = false;
-					thread RunUpdateMsg()
+			{		
+				#if TRACKER && HAS_TRACKER_DLL	
 				
-				break;
-			
-			case "spamstop":
-			case "stopspam":
-			
-					file.stop_update_msg_flag = true;
-				
-				break;
-				
-			case "msg":
-			
-						if ( args.len() < 2)
-						{
-							Message( player, "Failed", "Param 1 of command 'serversay' requires string")
-							return true
-						}
-						
-						
-						try 
-						{	
-							if( !SendServerMessage( param ) )
-							{
-								Message( player, "Error", "Message was truncated")
-							}
-							
-							return true
-						} 
-						catch (errservermsg) 
-						{		
-							Message( player, "Failed", "Command failed because of: \n\n " + errservermsg )
-							return true		
-						}
-						
-			case "vc":
+					const array<string> PROTECTED_SETTINGS =
+					[
+						"apikey", /* blocked at engine level */
+						"webhooks.PLAYERS_WEBHOOK",
+						"webhooks.MATCHES_WEBHOOK"
+					]
 				
 					if ( args.len() < 2)
-						{
-							Message( player, "Failed", "Param 1 of command 'vc' requires bool: 1/0 true/false on/off enabled/disabled")
+					{
+						Message( player, "Failed", "Param 1 of command 'setting' requires key name" )
+						return true
+					}			
+					
+					if( param == "" )
+					{
+						Message( player, "Failed", "setting name cannot be empty" )
+						return true
+					}
+
+					if( PROTECTED_SETTINGS.contains( param ) )
+					{
+						Message( player, "Failed", format( "Setting \"%s\" is a protected setting and cannot be shown.", param ) )
+						return true
+					}
+					
+					try 
+					{	
+						string return_str = ""
+						return_str = TrackerGetSettingString( param )	
+						
+						Message( player, param + ":", return_str )
+						return true
+					} 
+					catch ( errset ) 
+					{			
+						Message( player, "Failed", "Command failed because of: \n\n " + errset )
+						return true		
+					}
+				
+				#endif
+						
+				break
+			}
+			case "spamupdate":
+			case "spam":
+			{
+				file.bStopUpdateMsg = false
+				thread RunUpdateMsg()
+				sqprint( "Update spam messages started" )
+				
+				break
+			}
+			case "spamstop":
+			case "stopspam":
+			{
+				file.bStopUpdateMsg = true
+				sqprint( "Update spam messages stopped" )
+				
+				break
+			}
+			case "msgall":
+			{
+				if ( args.len() < 2 )
+				{
+					Message( player, "Failed", "Param 1 of command 'msgall' requires string" )
+					return true
+				}
+				
+				try
+				{	
+					if( !SendServerMessage( param ) )
+						Message( player, "Error", "Message was truncated")
+					
+					return true
+				}
+				catch ( errservermsg ) 
+				{		
+					Message( player, "Failed", "Command failed because of: \n\n " + errservermsg )
+					return true		
+				}
+					
+				break
+			}	
+			case "msg":
+			{
+				if ( args.len() < 2 )
+				{
+					Message( player, "Failed", "Param 1 of command 'msg' requires playername/uid" )
+					return true
+				}
+				
+				if( args.len() < 3 )
+				{
+					Message( player, "Failed", "Param 2 of command 'msg' requires string" )
+					return true
+				}
+				
+				if( param2 == "" )
+				{
+					Message( player, "Failed", "Cannot send empty message" )
+					return true
+				}
+				
+				try
+				{	
+					entity toPlayer = GetPlayer( param )
+					if( !IsValid( player ) )
+					{
+						Message( player, "Error", format( "Player '%s' is invalud", param ) )
+						return true
+					}
+					
+					if( player == toPlayer )
+					{
+						Message( player, "Error", "Cannot send a message to yourself" )
+						return true
+					}
+				
+					if( !SendPM( player, toPlayer, param2 ) )
+						Message( player, "Error", "Message was not sent" )
+					
+					return true
+				}
+				catch ( errservermsg ) 
+				{		
+					Message( player, "Failed", "Command failed because of: \n\n " + errservermsg )
+					return true		
+				}
+				
+				break
+			}
+			case "adminmsgall":
+			{
+				if( args.len() < 2 || param == "" )
+				{
+					Message( player, "Error", "Param 1 of adminmsgall requires string" )
+					return true
+				}
+				
+				foreach( sPlayer in GetPlayerArray() )
+					AdminMessage( player, sPlayer, param )
+					
+				Message( player, "Message sent" )
+				break
+			}
+			case "adminmsg":
+			{
+				if ( args.len() < 2 )
+				{
+					Message( player, "Failed", "Param 1 of command 'adminmsg' requires playername/uid" )
+					return true
+				}
+				
+				if( args.len() < 3 )
+				{
+					Message( player, "Failed", "Param 2 of command 'adminmsg' requires string" )
+					return true
+				}
+				
+				entity toPlayer = GetPlayer( param )
+				if( !IsValid( toPlayer ) )
+				{
+					Message( player, "Failed", format( "Player '%s' is not valid.", toPlayer ) )
+					return true 
+				}
+				
+				if( !AdminMessage( player, toPlayer, param2 ) )
+				{
+					Message( player, "Failed", "Message was not sent" )
+					return true
+				}
+				
+				Message( player, format( "Admin message sent to '%s'", toPlayer.GetPlayerName() ) )
+				break
+			}
+			case "vc":
+			{
+				if ( args.len() < 2)
+				{
+					Message( player, "Failed", "Param 1 of command 'vc' requires bool: 1/0 true/false on/off enabled/disabled")
+					return true
+				}
+					
+					
+				try 
+				{	
+					switch( param )
+					{	
+						case "1":
+						case "true":
+						case "on":
+						case "enabled":
+							SetConVarBool( "sv_voiceenable", true )
+							SetConVarBool( "sv_alltalk", true )
+							
+							if ( GetConVarBool( "sv_voiceenable" ) || GetConVarBool( "sv_alltalk" ) )
+							{
+								foreach ( active_player in GetPlayerArray() )
+								{	
+									Message( active_player, "VOICE CHAT ENABLED" )
+								}
+							}
+							else 
+							{
+								Message( player, "FAILED" )
+							}
+
 							return true
-						}
-						
-						
-						try 
-						{	
-							switch(param)
+							
+						case "0":
+						case "false":
+						case "off":
+						case "disabled":
+							SetConVarBool( "sv_voiceenable", false )
+							SetConVarBool( "sv_alltalk", false )
+							
+							if ( !GetConVarBool( "sv_voiceenable" ) || !GetConVarBool( "sv_alltalk" ) )
 							{	
-								case "1":
-								case "true":
-								case "on":
-								case "enabled":
-									SetConVarBool( "sv_voiceenable", true )
-									SetConVarBool( "sv_alltalk", true )
-									
-									if ( GetConVarBool( "sv_voiceenable" ) || GetConVarBool( "sv_alltalk" ) )
-									{
-										foreach ( active_player in GetPlayerArray() )
-										{	
-											Message( active_player, "VOICE CHAT ENABLED" )
-										}
-									}
-									else 
-									{
-										Message( player, "FAILED" )
-									}
-		
-									return true
-									
-								case "0":
-								case "false":
-								case "off":
-								case "disabled":
-									SetConVarBool( "sv_voiceenable", false )
-									SetConVarBool( "sv_alltalk", false )
-									
-									if ( !GetConVarBool( "sv_voiceenable" ) || !GetConVarBool( "sv_alltalk" ) )
-									{	
-										foreach ( active_player in GetPlayerArray() )
-										{	
-											Message( active_player, "VOICE CHAT DISABLED" )
-										}
-									}
-									else 
-									{
-										Message( player, "FAILED" )
-									}
-									
-									return true		
+								foreach ( active_player in GetPlayerArray() )
+								{	
+									Message( active_player, "VOICE CHAT DISABLED" )
+								}
+							}
+							else 
+							{
+								Message( player, "FAILED" )
 							}
 							
-							Message( player, "INVALID SETTING" )
-							return true
-						} 
-						catch (errvc) 
-						{		
-							Message( player, "Failed", "Command failed because of: \n\n " + errvc)
 							return true		
-						}
-						
-					break
-				
-				
+					}
+					
+					Message( player, "INVALID SETTING" )
+					return true
+				} 
+				catch ( errvc ) 
+				{		
+					Message( player, "Failed", "Command failed because of: \n\n " + errvc)
+					return true		
+				}
+					
+				break	
+			}	
 			case "startbr":
-			
-					FlagSet( "MinPlayersReached" )	
-					return true
-					
+			{
+				FlagSet( "MinPlayersReached" )	
+				return true
+			}	
 			case "pos":
-				
-					#if DEVELOPER
-					
-						if (args.len() < 2)
-						{
-							Message( player, "NEED TO NAME THE SPAWN" );
-							return true
-						}
-						
-						try 
-						{
-							POS_CC(player,param)
-						}
-						catch(pos_error)
-						{
-							Message( player, "Error", "Failed: " + pos_error )
-						}
+			{	
+				#if DEVELOPER		
+					if ( args.len() < 2 )
+					{
+						Message( player, "NEED TO NAME THE SPAWN" );
 						return true
-					#endif
-				return false;
-			
-			case "groups":
-			
-					Message(player, "\"groupsInProgress\"", getGroupsInProgress().len().tostring())
-					return true
+					}
 					
-			case "groupmap":
-			
-					Message(player, "\"playerToGroupMap\"", getPlayerToGroupMap().len().tostring())
-					return true
-					
-			case "start_interval_thread":
+					try 
+					{
+						POS_CC( player, param )
+					}
+					catch( pos_error )
+					{
+						Message( player, "Error", "Failed: " + pos_error )
+					}
 
-					#if TRACKER
-						if( isIntervalThreadRunning() )
-						{
-							Message( player, "Interval thread is already running." )
-							return true 
-						}
-						
-						Message( player, "INTERVAL THREAD STARTING" )
-						DEV_StartIntervalThread()
-					#endif
-					
-						return true 
-					
-			case "kill_interval_thread":
-					
-					#if TRACKER
-						svGlobal.levelEnt.Signal( "KillIntervalThread" ) 
-						Message( player, "INTERVAL THREAD STOPPING" )
-					#endif
-					
 					return true
+				#else
+					return false
+				#endif
+			}
+			case "groups":
+			{
+				Message( player, "\"groupsInProgress\"", Gamemode1v1_GetNumberOfGroupsInProgress().tostring() )
+				return true
+			}
+			case "groupmap":
+			{
+				Message( player, "\"playerToGroupMap\"", Gamemode1v1_GetNumberOfPlayersInGroupMap().tostring() )
+				return true
+			}
+			case "start_interval_thread":
+			{
+				#if TRACKER
+					if( IsMessageBotIntervalThreadRunning() )
+					{
+						Message( player, "Interval thread is already running." )
+						return true 
+					}
 					
-			//case "testsend":
-			
-					//SQ_MsgToClient( param.tointeger(), param2 )
-					
-					//return true
-			case "thumbsup":
+					Message( player, "INTERVAL THREAD STARTING" )
+					DEV_StartIntervalThread()
+				#endif
 				
+				return true 
+			}		
+			case "kill_interval_thread":
+			{		
+				#if TRACKER
+					svGlobal.levelEnt.Signal( "KillIntervalThread" ) 
+					Message( player, "INTERVAL THREAD STOPPING" )
+				#endif
+				
+				return true
+			}		
+			case "thumbsup":
+			{	
 				SendServerMessage(chat.effects["THUMBSUP"])		
 				return true
-				
+			}	
 			case "print_chat_effects":
-			
+			{
 				#if DEVELOPER
 					DEV_PrintAllChatEffects()
 				#endif 
 				
 				return true
-				
+			}	
 			case "msgeffect":
-					
+			{		
 				SendServerMessage( Chat_FindEffect( param ) )
 				return true
-				
+			}	
 			case "nextmap":
-			
+			{
 				Tracker_GotoNextMap()
 				return true
-			
+			}
 			case "fetchsetting":
-			
-			#if TRACKER
-				entity p = GetPlayer( param )
+			{
+				#if TRACKER
+					entity p = GetPlayer( param )
+					
+					if ( empty(param2) )
+					{
+						Message( player, "Parameter 2 was empty" )
+						return true 
+					}
+					
+					if( IsValid( p ) )
+						Message( player, "Data for: " + param, Tracker_FetchPlayerData( p.p.UID, param2 ) )
+					else 
+						Message( player, "Error", format( "Player: %s was invalid", StringRemoveControlCharacters( param ) ), 7 )
+					
+					return true
+				#endif
 				
-				if ( empty(param2) )
-				{
-					Message( player, "Parameter 2 was empty" )
-					return true 
-				}
-				
-				if( IsValid( p ) )
-					Message( player, "Data for: " + param, Tracker_FetchPlayerData( p.p.UID, param2 ) )
-				else 
-					Message( player, "Error", format( "Player: %s was invalid", sanitize(param) ), 7 )
-				
-			#endif
-				return true
-				
+				return false
+			}	
 			case "testremote":
-			
+			{
 				#if DEVELOPER
 					Remote_CallFunction_NonReplay( player, "ServerCallback_SetPersistenceSettings", 1, 2, 3, 4)
+					return true
 				#endif
-				return true
 				
+				return false
+			}	
 			case "acceptchal":
-			
+			{
 				#if DEVELOPER
 					entity p = GetPlayer( param )
 					
@@ -1517,16 +1738,14 @@ struct {
 					}
 					
 					DEV_acceptchal(p)
-				#else 
-					printt("Dev mode only")
+					return true
 				#endif 
 				
-				return true
-				
+				return false
+			}	
 			case "draw":
-			
-				#if DEVELOPER 
-				
+			{
+				#if DEVELOPER 			
 					printt("Drawing...")
 					foreach( s_player in GetPlayerArray() )
 					{
@@ -1534,28 +1753,26 @@ struct {
 						//Remote_CallFunction_NonReplay( s_player, "Minimap_EnableDraw_Internal")
 					}
 					
+					return true
 				#endif 
 				
-				return true 
-				
+				return false 
+			}	
 			case "disabledraw":
-			
-				#if DEVELOPER 
-				
-					printt("DisableDrawing...")
+			{
+				#if DEVELOPER 		
+					printt( "DisableDrawing..." )
 					foreach( s_player in GetPlayerArray() )
-					{
 						Remote_CallFunction_ByRef( s_player, "Minimap_DisableDraw_Internal" )
-						//Remote_CallFunction_NonReplay( s_player, "Minimap_DisableDraw_Internal")
-					}
-					
+						
+					return true 
 				#endif 
 				
-				return true 
-			
+				return false 
+			}		
 #if DEVELOPER			
 			case "stoplog":
-			
+			{
 				#if TRACKER && HAS_TRACKER_DLL
 				
 					bool ship = false 
@@ -1578,9 +1795,9 @@ struct {
 				#endif
 				
 				return true
-				
+			}	
 			case "startlog":
-			
+			{
 				#if TRACKER && HAS_TRACKER_DLL
 					if( bLog() )
 					{
@@ -1594,55 +1811,69 @@ struct {
 				#endif
 				
 				return true
+				
+			}
 #endif 
-
 			case "mute":
 			case "gag":
+			{	
+				entity mutePlayer = GetPlayer( param )				
+				string reason = Chat_FindReasonInArgs( args )
 				
-				entity p = GetPlayer( param )				
-				if( !IsValid( p ) )
+				if( !IsValid( mutePlayer ) )
 				{
-					if( !IsNum( param ) )
+					if( !IsStringNumber( param ) )
 					{
 						Message( player, "Error", "Invalid player & non-numeric uid." )
 						return true
 					}
 					else 
 					{
-						Message( player, "Attempting Save", "Saving uid: " + param )
+						Message( player, "Attempting Save", "Offline player is being saved to muted list: " + param )
 					}
 				}
 				else 
 				{
-					string reason = Chat_FindMuteReasonInArgs( args )
-					LocalMsg( p, "#FS_MUTED", "", eMsgUI.DEFAULT, 5, "", reason )
+					LocalMsg( mutePlayer, "#FS_MUTED", "", eMsgUI.DEFAULT, 5, "", reason )
 				}
 					
 				#if TRACKER
 					Tracker_SetForceUpdatePlayerData() //does nothing if already set.
-				#endif 
+				#endif
 				
-				if( !Chat_ToggleMuteForAll( p, true, true, args, -1, param ) )
+				if( !Chat_ToggleMuteForAll( mutePlayer, true, true, args, -1, param, player ) )
 					Message( player, "Failed" )
 				else
 					Message( player, "Muted " + param )
+					
+				if( args.contains( "-say" ) )
+				{
+					string muteMessage = format( "%s was muted for %s", mutePlayer.GetPlayerName(), reason )
+					foreach( s_player in GetPlayerArray() )
+					{
+						if( s_player == mutePlayer )
+							continue
+							
+						SendResponse( s_player, muteMessage )
+					}
+				}
 				
 				return true
-			
+			}
 			case "unmute":
 			case "ungag":
-			
+			{
 				entity p = GetPlayer( param )				
 				if( !IsValid( p ) )
 				{
-					if( !IsNum( param ) )
+					if( !IsStringNumber( param ) )
 					{
 						Message( player, "Error", "Invalid player & non-numeric uid." )
 						return true
 					}
 					else 
 					{
-						Message( player, "Attempting Save", "Saving uid unmuted: " + param )
+						Message( player, "Attempting Save", "Offlie player is being saved unmuted: " + param )
 					}
 				}
 				else 
@@ -1659,9 +1890,9 @@ struct {
 				#endif 
 				
 				string uid = IsValid( p ) ? p.p.UID : param
-				if( Chat_ToggleMuteForAll( p, false, true, args ) )
+				if( Chat_ToggleMuteForAll( p, false, true, args, 0, "", player ) )
 				{
-					string reason = Chat_FindMuteReasonInArgs( args )			
+					string reason = Chat_FindReasonInArgs( args )			
 					LocalMsg( p, "#FS_UNMUTED", "", eMsgUI.DEFAULT, 5, "", reason )
 					Message( player, "Player " + uid, "UNMUTED" )
 				}
@@ -1679,10 +1910,10 @@ struct {
 				}
 				
 				return true
-				
+			}	
 			case "is_muted":
 			case "is_gagged":
-				
+			{	
 				entity p = GetPlayer( param )				
 				if( !IsValid( p ) )
 				{
@@ -1704,14 +1935,14 @@ struct {
 				}
 				
 				return true 
-				
+			}	
 			case "mute_reason":
 			case "gag_reason":
-				
+			{	
 				entity p = GetPlayer( param )
 				string uidLookup
 				
-				if( IsNumeric( param ) )
+				if( IsStringNumeric( param ) )
 					uidLookup = param
 					
 				if( IsValid( p ) )
@@ -1723,14 +1954,14 @@ struct {
 				
 				Message( player, "MUTED REASON:", reason )
 				return true
-				
+			}	
 			case "unmute_time":
 			case "ungag_time":
-			
+			{
 				entity p = GetPlayer( param )
 				string uidLookup
 				
-				if( IsNumeric( param ) )
+				if( IsStringNumeric( param ) )
 					uidLookup = param
 					
 				if( IsValid( p ) )
@@ -1739,56 +1970,44 @@ struct {
 				string unmuteTimestamp 	= Tracker_FetchPlayerData( uidLookup, "unmuteTime" )
 				string timestring 		= "0"
 				
-				if( IsNumeric( unmuteTimestamp ) )
-					timestring = Chat_ReadableUnmuteTime( unmuteTimestamp.tointeger() )
+				if( IsStringNumeric( unmuteTimestamp ) )
+					timestring = Chat_ReadableExpiresTime( unmuteTimestamp.tointeger() )
 				
 				Message( player, "UNMUTE TIME: " + unmuteTimestamp, timestring )
 				return true
-				
+			}	
 			case "killme":
-			
-			#if DEVELOPER
-				if( IsAlive( player ) )
-				{
-					player.Die( null, null, { damageSourceId = eDamageSourceId.damagedef_suicide } )
-				}
-			#endif 	
-				return true
-						
-			case "dmg":
-			
-			#if DEVELOPER
-				entity p = GetPlayer( param )
-				
-				if( IsValid( p ) )
-				{
-					if( IsNumeric( param2 ) )
+			{
+				#if DEVELOPER
+					if( IsAlive( player ) )
 					{
-						int dmg = param2.tointeger()
-						entity worldspawn = GetEnt( "worldspawn" )
-						p.TakeDamage( dmg, worldspawn, worldspawn, {} )
+						player.Die( null, null, { damageSourceId = eDamageSourceId.damagedef_suicide } )
 					}
-				}
-			#endif 
+				#endif 	
+				
+				return true
+			}			
+			case "dmg":
+			{
+				#if DEVELOPER
+					entity p = GetPlayer( param )
+					
+					if( IsValid( p ) )
+					{
+						if( IsStringNumeric( param2 ) )
+						{
+							int dmg = param2.tointeger()
+							entity worldspawn = GetEnt( "worldspawn" )
+							p.TakeDamage( dmg, worldspawn, worldspawn, {} )
+						}
+					}
+				#endif 
 			
 				return true
-				
-			case "gamerules":
-			
-				//TODO: mini framework for parsing valid map/playlist combos
-				//CreateServer("","","mp_rr_desertlands_64k_x_64k","fs_survival_solos", 0)
-				break
-				
-			case "testimg":
-			
-				#if DEVELOPER 
-					
-				#endif
-				break
-				
+			}
 			case "movement_recorder_playback_rate":
-			
-				if( IsNumeric( param ) )
+			{
+				if( IsStringNumeric( param ) )
 				{
 					MovementRecorder_SetPlaybackRate( float( param ) )
 					Message( player, "Playback rate set to: " + param )
@@ -1799,33 +2018,242 @@ struct {
 				}
 				
 				break
-				
+			}
 			case "kill_banners":
-			
-				BannerAssets_KillAllBanners()
+			{
+				WorldAssets_KillAllBanners()
+				Message( player, "Banners stopped" )		
 				break 
-				
+			}	
 			case "start_banners":
-			
-				BannerAssets_Restart()
+			{
+				WorldAssets_Restart()
+				Message( player, "Banners restarted" )	
 				break
+			}	
+			case "allow_legend_select":
+			{
+				if( empty( param ) )
+				{
+					Message( player, "Command 'allow_legend_select' requires paramater of [true|1] / [false|0]" )
+					return true
+				}
+					
+				bool result = false
+				switch( param )
+				{
+					case "1":
+					case "true":
+						Gamemode1v1_SetAllowLegendSelect( true )
+						result = true
+						break
+						
+					case "0":
+					case "false":
+						Gamemode1v1_SetAllowLegendSelect( true )
+						result = false
+						break
+						
+					default:
+						Message( player, "Invalid paramater" )
+						return true
+				}
 				
-			default:	
-						Message( player, "Usage", "cc #command #param1 #param2 #..." )
-						return true;
+				Message( player, "Legend Select was set to " + ( result ? "ENABLED" : "DISABLED" ) )
+				break
+			}	
+			case "set_legend":
+			{
+				if( empty( param ) || !IsStringNumeric( param ) )
+				{
+					Message( player, "Command 'set_legend' requires numeric paramater for legend index" )
+					return true
+				}
+				
+				int index = param.tointeger()
+				Gamemode1v1_SetAllPlayersLegend( index )
+				break
+			}
+			case "endround":
+			{
+				EndRound()
+				break
+			}
+				
+			case "addmotd":
+			{			
+				if( empty( param ) )
+				{
+					Message( player, "Failed", "parameter 1 of 'addmotd' requires playername|uid" )
+					return true 
+				}
+				
+				if( empty( param2 ) )
+				{
+					Message( player, "Failed", "parameter 2 of 'addmotd' requires \"message in quotes\"" )
+					return true
+				}
+				
+				entity potentialPlayer = GetPlayer( param )
+				if( !IsValid( potentialPlayer ) )
+				{
+					Message( player, "Player was invalid" )
+					return true
+				}
+				
+				Tracker_UpdateMOTDTextForPlayer( potentialPlayer, param2 )
+				Message( player, "Success", format( "Message was prepended to player \"%s\" as: \n\n %s", string( potentialPlayer ), param2 ), 15 )
+				
+				break 
+			}			
+			case "restart_ws":
+			{
+				#if TRACKER 
+					TrackerRestartWebsocket__internal() //useful if websocket server goes down for some reason and admin wants to manually reset connection from cc		
+					Message( player, "Success", "Restarting websocket connection to r5r.dev" )
+				#else
+					return false
+				#endif 
+				
+				break
+			}
+			case "timeout":  // criteria, toggle, timeoutAmount + -reason "reason" 
+			{
+				if( param == "" )
+				{
+					Message( player, "Error:", "Cmd timeout requires param 1 of playername/uid" )
+					return true
+				}
+				
+				entity timeoutPlayer = GetPlayer( param )
+				if( !IsValid( timeoutPlayer ) )
+				{
+					Message( player, "Error:", "Player was invalid" )
+					return true
+				}
+				
+				if( param2 == "" )
+				{
+					Message( player, "Error: Cmd timeout requires param 2 of bool", "Should be replaced after the player name. Example: cc timeout [playername] true/false -r \"Bad boy\" 30 s -say" )
+					return true
+				}
+				
+				if( !IsStringBool( param2 ) )
+				{
+					Message( player, "Error:", "Param 2 was not a valid representation of bool. Example:  [true/false|1/0]" )
+					return true
+				}
+				
+				bool toggle = StringToBool( param2 )
+				
+				int timeoutAmount = ParseTimeString( ReturnParsableTimestringArgsAtIndex( args, 3 ) )			
+				
+				string reason = Chat_FindReasonInArgs( args )
+				Timeout_SetPlayerTimedOut( timeoutPlayer, toggle, player.GetPlayerName(), timeoutAmount, reason )
+							
+				string readableExpiresTime = Chat_ReadableExpiresTime( Timeout_GetTimeoutExpiresTimestamp( timeoutPlayer ) )	
+					
+				string timeoutMessage = format( "%s was put in timeout for (%s)\nReason: %s", player.GetPlayerName(), readableExpiresTime, reason != "" ? reason : "{empty}" )
+				Message( player, "Success", timeoutMessage )
+				
+				if( args.contains( "-say" ) )
+				{
+					foreach( s_player in GetPlayerArray() )
+					{
+						if( s_player == timeoutPlayer )
+							continue 
+							
+						SendResponse( s_player, timeoutMessage )
+					}
+				}
+				
+				if( args.contains( "-motd" ) )
+					AdminCommandOpenMOTD( timeoutPlayer )
+				
+				break
+			}
+			case "gettimeout":
+			{
+				if( param == "" )
+				{
+					Message( player, "Error:", "Cmd gettimeout requires param 1 as [player/uid]" )
+					return true
+				}
+				
+				entity candidate = GetPlayer( param )
+				if( !IsValid( player ) )
+				{
+					Message( player, "Error:", format( "Player '%s' was invalid.", param ) )
+					return true
+				}
+				
+				Message( player, "Info:", Timeout_PrintTimeoutData( candidate ), 15.0 )
+				
+				break
+			}
+			case "noclip":
+			{
+				if( !GetCurrentPlaylistVarBool( "enable_admin_noclip", false ) )
+				{
+					Message( player, "Failed", "Server operator has 'enable_admin_noclip' disabled" )
+					return true 
+				}
+			
+				if ( player.IsNoclipping() )
+					player.SetPhysics( MOVETYPE_WALK )
+				else
+					player.SetPhysics( MOVETYPE_NOCLIP )
+					
+				break
+			}
+			case "disable_rotate":
+			{
+				if( param == "" || !IsStringBool( param ) )
+				{
+					Message( player, "Failed", format( "Param 1 of command \"%s\" requires bool 0|1|false|true", command ) )
+					return true
+				}
+				
+				string bSettingValue = StringToBool( param ) ? "true" : "false"
+				Dev_CommandLineAddParm( "autoRotateForceDisable", bSettingValue )
+				
+				Message( player, "Success", format( "Force Auto map rotation was set to \"%s\"", bSettingValue ) )
+				break
+			}
+			case "show_motd":
+			{
+				entity candidate = GetPlayer( param )
+				if( !IsValid( candidate ) )
+				{
+					Message( player, "Error", "Invalid player " + param )
+					break
+				}
+				
+				if( !AdminCommandOpenMOTD( candidate ) )
+					Message( player, "Error", "Player disconnected" )
+				else
+					Message( player, "Sent", "If the player has MOTD enabled they will see it popup,\n else they would need to manually view it from menu button" )
+			
+				break
+			}
+			//more...
+			
+			default:
+			{	
+				Message( player, "Usage", "cc #command #param1 #param2 #..." )
+				return true
+			}
 		}
-		
-		
-		return true;
+			
+		return true
 	}
 
 void function RunUpdateMsg()
-{	
+{		
+	string update_title = GetCurrentPlaylistVarString( "update_title", "Server about to UPDATE" )
+	string update_msg = GetCurrentPlaylistVarString( "update_msg", "Server will go down briefly" )
 	
-	string update_title = GetCurrentPlaylistVarString( "update_title","Server about to UPDATE" )
-	string update_msg = GetCurrentPlaylistVarString( "update_msg","Server will go down briefly" )
-	
-	while( !file.stop_update_msg_flag )
+	while( !file.bStopUpdateMsg )
 	{		
 		foreach( player in GetPlayerArray() )
 		{
@@ -1838,13 +2266,6 @@ void function RunUpdateMsg()
 		SendServerMessage( update_title )	
 		wait 3.6
 	}
-}
-
-void function update()
-{
-	file.stop_update_msg_flag = false;
-	thread RunUpdateMsg()
-	sqerror("Update spam messages started")
 }
 
 bool function EnableVoice()
@@ -1877,32 +2298,8 @@ bool function EnableVoice()
 /////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////
 
-//php my beloved
-//trims leading and trialing whitespace from a string
-string function trim( string str ) 
-{
-	return strip( str )
-	
-	/*
-		int start = 0;
-		int end = str.len() - 1;
-		string whitespace = " \t\n\r";
 
-		while ( start <= end && whitespace.find( str.slice( start, start + 1 )) != -1 ) 
-		{
-			start++;
-		}
-
-		while (end >= start && whitespace.find( str.slice( end, end + 1 )) != -1 ) 
-		{
-			end--;
-		}
-
-		return str.slice(start, end + 1);
-	*/
-}
-
-string function Concatenate( string str1, string str2 ) 
+string function Concatenate( string str1, string str2 )  //cleanup
 {	
 	int str1_length = str1.len()
 	int str2_length = str2.len()
@@ -1934,221 +2331,300 @@ string function Concatenate( string str1, string str2 )
     return str1 + str2;
 }
 
-float function GetDefaultIBMM()
+bool function IsStringNumber( string str ) 
 {
-	float f_wait = GetCurrentPlaylistVarFloat("default_ibmm_wait", 0)
-	return ValidateIBMMWaitTime( f_wait )
-}
-
-float function ValidateIBMMWaitTime( float f_wait )
-{
-	return f_wait > 0.0 && f_wait < 3.0 ? 3.0 : f_wait;
-}
-
-void function SetDefaultIBMM( entity player )
-{	
-	float f_wait = GetCurrentPlaylistVarFloat("default_ibmm_wait", 0)
-	player.p.IBMM_grace_period = f_wait > 0.0 && f_wait < 3.0 ? 3.0 : f_wait;
-}
-
-bool function IsNum( string str ) 
-{
-    if ( str.len() == 0 ){ return false }
+	if ( str.len() == 0 )
+		return false
 	
-    int start = ( str[0] == '-' && str.len() > 1 ) ? 1 : 0;
-    
+    int start = ( str[0] == '-' && str.len() > 1 ) ? 1 : 0    
 	bool dot = false
 	
 	for ( int i = start; i < str.len(); i++ ) 
 	{
 		if (str[i] == '.')
 		{
-			if(dot)
-			{ 
-				return false; 
-			}
+			if( dot )
+				return false
 			else 
-			{
-				dot = true;
-			}
+				dot = true
 		} 
-		else if (str[i] < '0' || str[i] > '9'){ return false }
+		else if ( str[i] < '0' || str[i] > '9' )
+			return false
     }
 	
     return true
 }
 
+bool function IsStringNumber2( string str )
+{
+	return DoesMatchRegexp( str, "^-?(\\d+\\.\\d+|\\d+)$" ) 
+}
+
+array<float> s_unitTestArr1
+void function RegExpUnitTest( string str )
+{
+	mAssert( IsThreadTop(), "Thread this function" )
+	
+	int iter = 0	
+	bool test
+	
+	TimerStart()
+	while( iter < 100000 )
+	{
+		test = IsStringNumber2( str )
+		iter++
+	}
+	
+	float finish = TimerEnd()
+	s_unitTestArr1.append( finish )
+	
+	printt( "Unit test1; regexp; 100000 iterations: ms:", finish, ";Criteria:", str )
+	
+	if( s_unitTestArr1.len() > 5 )
+	{
+		float total
+		foreach( float entry in s_unitTestArr1 )
+		{
+			printt( "entry =", entry )
+			total += entry
+		}
+			
+		float avg = total / 6
+		printt( "Unit test 1 avg = ms", avg )
+		
+		s_unitTestArr1.clear()
+	}
+}
+
+
+array<float> s_unitTestArr2
+void function RegExpUnitTest2( string str )
+{
+	mAssert( IsThreadTop(), "Thread this function" )
+	
+	int iter = 0	
+	bool test
+	
+	TimerStart()
+	while( iter < 100000 )
+	{
+		test = IsStringNumber( str )
+		iter++
+	}
+	
+	float finish = TimerEnd()
+	s_unitTestArr2.append( finish )
+	
+	printt( "Unit test1; custom; 100000 iterations: ms:", finish, ";Criteria:", str )
+	
+	if( s_unitTestArr2.len() > 5 )
+	{
+		float total
+		foreach( float entry in s_unitTestArr2 )
+		{
+			printt( "entry =", entry )
+			total += entry
+		}
+			
+		float avg = total / 6
+		printt( "Unit test 2 avg ms =", avg )
+		
+		s_unitTestArr2.clear()
+	}
+}
+
+array<float> s_unitTestArr3
+void function StringUnitTest( string str )
+{
+	mAssert( IsThreadTop(), "Thread this function" )
+	
+	int iter = 0	
+	bool test
+	
+	TimerStart()
+	while( iter < 100000 )
+	{
+		test = IsSafeString( str )
+		iter++
+	}
+	
+	float finish = TimerEnd()
+	s_unitTestArr3.append( finish )
+	
+	printt( "Unit test3; regexp IsSafeString; 100000 iterations: ms:", finish, ";Criteria:", str )
+	
+	if( s_unitTestArr3.len() > 5 )
+	{
+		float total
+		foreach( float entry in s_unitTestArr3 )
+		{
+			printt( "entry =", entry )
+			total += entry
+		}
+			
+		float avg = total / 6
+		printt( "Unit test 3 avg ms =", avg )
+		
+		s_unitTestArr3.clear()
+	}
+}
+
 int function stringcmp( string a, string b ) 
 {
-    if ( a.len() != b.len() ){ return a.len() < b.len() ? -1 : 1; }
+    if ( a.len() != b.len() )
+		return a.len() < b.len() ? -1 : 1
 	
-    for (int i = 0; i < a.len(); ++i) 
+    for ( int i = 0; i < a.len(); ++i ) 
 	{
-		if (a[i] != b[i])
-		{
-			return a[i] < b[i] ? -1 : 1;
-		}
+		if ( a[i] != b[i] )
+			return a[i] < b[i] ? -1 : 1
 	}
 
     return 0
 }
 
-bool function IsNumeric( string str, int min = -123, int max = -123 ) 
+bool function IsStringNumeric( string str, int ornull min = null, int ornull max = null )
 {
-
-	string minStr = min == -123 ? "-2147483647" : min.tostring()
-	string maxStr = max == -123 ? "2147483647" : max.tostring()
+	string minStr = min == null ? "-2147483647" : expect int ( min ).tostring()
+	string maxStr = max == null ? "2147483647" : expect int ( max ).tostring()
 	
-	if ( !IsNum( str ) ) 
-	{
-        return false;
-    }
+	if ( !IsStringNumber( str ) ) 
+        return false
     
     if ( str[0] == '-' ) 
 	{
-        if ( stringcmp( str.slice(1), minStr.slice(1) ) > 0 ) 
-		{
-            return false;
-        }
-    } 
+        if ( stringcmp( str.slice( 1 ), minStr.slice( 1 ) ) > 0 ) 
+            return false
+    }
 	else 
 	{
-        if ( stringcmp(str, maxStr) > 0 ) 
-		{
-            return false;
-        }
+        if ( stringcmp( str, maxStr ) > 0 ) 
+            return false
     }
 
     //sqprint( format( "%s", str ) )
-	
     return true
 }
 
 
-
-
-bool function IsFloat( string str, float min = INT_MAX, float limit = INT_MIN ) 
+bool function IsStringFloat( string str, float min = INT_MAX, float limit = INT_MIN )  //cleanup
 {
-	if (str.len() == 0) 
+	if ( str.len() == 0 ) 
+		return false
+	
+	for ( int i = 0; i < str.len(); i++ ) 
 	{
-		return false;
+		var c = str[i]
+		if ( !( ( c >= '0' && c <= '9' ) || ( c == '.' && i != 0 ) || ( c == '-' && i == 0 ) ) ) 
+			return false
 	}
 	
-	for (int i = 0; i < str.len(); i++) 
-	{
-		var c = str[i];
-		if (!((c >= '0' && c <= '9') || (c == '.' && i != 0) || (c == '-' && i == 0))) 
-		{
-			return false;
-		}
-	}
-	
-	float num = 0.0;
-	try { num = str.tofloat(); } catch (outofrange) { return false; }
-	
-	return ( num >= min && num <= limit );
+	float num = 0.0
+	try { num = str.tofloat() } catch ( outofrange ){ return false }	
+	return ( num >= min && num <= limit )
 }
 
-string function LineBreak(string str, int interval = 80) 
+string function LineBreak( string str, int interval = 80 )
 {
-	string output = "";
+	string output = ""
 	
-	for (int i = 0; i < str.len();) 
+	for ( int i = 0; i < str.len(); ) 
 	{
-		int end = i + interval;
+		int end = i + interval
 		
-		if (end >= str.len()) 
+		if ( end >= str.len() ) 
 		{
-			output += str.slice(i) + "\n";
-			break;
+			output += str.slice( i ) + "\n"
+			break
 		}
 		
-		bool located_space = false;
+		bool located_space = false
 		
-		for (int j = end; j > i; --j) 
+		for ( int j = end; j > i; --j ) 
 		{
-			if (str.slice(j-1, j) == " ") 
+			if ( str.slice( j-1, j ) == " " ) 
 			{
-				end = j;
-				located_space = true;
-				break;
+				end = j
+				located_space = true
+				break
 			}
 		}
 		
-		if (!located_space) 
-		{
-			end = i + interval;
-		}
+		if ( !located_space ) 
+			end = i + interval
 
-		output += str.slice(i, end) + "\n";
-		i = end;
+		output += str.slice( i, end ) + "\n"
+		i = end
 	}
 	
-	return output;
+	return output
 }
 
-string function ReturnKey( string str )
+bool function IsStringBool( string str )
 {
-	array<string> split = split(str , ":")	
-	return split[0]
-}
-
-string function ReturnValue( string str )
-{	
-	try 
+	switch( str )
 	{
-		array<string> split = split(str , ":")
+		case "0":
+		case "1":
+		case "true":
+		case "false":		
+			return true 
 		
-		if( split.len() < 2 )
-		{
-			return "";
-		}
-		
-		if ( split[1] == "NA" )
-		{	
-			#if DEVELOPER
-				sqprint( "Default value was returned for key: " + str )
-			#endif
-			return "";
-		}
-		
-		return split[1]
-	} 
-	catch (err)
-	{
-		#if DEVELOPER 
-			sqerror( "ReturnValue() failed for key:value " + str )
-		#endif 
-		return "";
-	}		
+		default:
+			return false 
+	}
+	
+	unreachable
 }
 
-bool function Is_Bool(string str)
-{
-	int num = 0;
-	string a_str = str; 
-	
-	if (a_str.len() == 0 || (a_str[0] < '0' || a_str[0] > '9') && a_str[0] != '-') return false;
-	
-	try { num = a_str.tointeger(); } catch (outofrange) { return false; }
-	
-	return ( abs(num) >= 0 && abs(num) <= 1);
-}
-
-entity function GetPlayerEntityByName( string name )
+bool function StringToBool( string str )
 {	
-	entity p;	
+	switch( str )
+	{
+		case "0":
+		case "false":
+			return false 
+			
+		case "1":
+		case "true":
+			return true 
+			
+		default:
+			mAssert( IsStringBool( str ), "Tried to convert \"%s\" to bool. Should have used IsStringBool() on criteria before calling", str )
+	}
+	
+	return false
+}
+
+entity function GetPlayerEntityByName( string name ) //deprecate use universal lookup for both name/uid
+{	
+	entity p	
 	name = name.tolower()
 	
 	foreach ( player in GetPlayerArray() )
 	{
-		if ( player.GetPlayerName().tolower() == name )
-		{		
-			return player;	
-		}	
+		if ( player.GetPlayerName().tolower() == name )	
+			return player
 	}
 	
-	return p;
+	if( file.bAllowLooseNameComp )
+		p = GetPlayerEntityByName_Loose( name )	
+		
+	return p
+}
+
+entity function GetPlayerEntityByName_Loose( string name )
+{
+	string candidate
+	foreach( player in GetPlayerArray() )
+	{
+		candidate = player.GetPlayerName().tolower()
+		if( candidate.find( name ) != -1 )
+			return player
+	}
+	
+	entity invalid 
+	return invalid
 }
 
 void function CheckAdmin_OnConnect( entity player )
@@ -2156,20 +2632,19 @@ void function CheckAdmin_OnConnect( entity player )
 	if( !IsValid( player ) ) 
 		return
 	
-	if( IsTrackerAdmin( player.GetPlatformUID() ) )
+	if( IsServerAdmin( player.GetPlatformUID() ) ) //use new oid list
+	{
 		player.SetPlayerNetBool( "IsAdmin", true )
+		Remote_CallFunction_UI( player, "UICallback_AdminStatus", true )
+		
+		//printw( "CheckAdmin_OnConnect ADMIN DETECTED", player.GetPlayerName(), "IsAdmin netvar = TRUE, and UI VM var set" )
+	} else
+		Remote_CallFunction_UI( player, "UICallback_AdminStatus", false ) //refresh
 }
 
-// WARNING, use ONLY VerifyAdmin() for permissive uses, not this.
-bool function IsTrackerAdmin( string CheckPlayer ) //todo:deprecate
+bool function IsAuthEnabled()
 {
-	foreach ( Player, OID in player_admins ) 
-	{
-		if ( Player == CheckPlayer || OID == CheckPlayer ) 
-			return true
-	}
-	
-	return false
+	return GetConVarInt( "sv_onlineAuthEnable" ) == 1
 }
 
 //Todo: Lookup fromthe table of oid -> playerdata, include .entity (this gets created when a player joins once. )
@@ -2191,7 +2666,7 @@ entity function GetPlayerEntityByUID( string str )
 			return Tracker_StatsMetricsByUID( str ).ent
 	#else
 		
-		if ( !IsNum( str ) )
+		if ( !IsStringNumber( str ) )
 			return candidate
 		
 		foreach ( player in GetPlayerArray() )
@@ -2218,78 +2693,76 @@ entity function GetPlayer( string str ) //todo:deprecate
 	return GetPlayerEntityByName( str )	
 }
 
-string function GetMap( string str ) //todo:deprecate
+string function FindMap( string query )
 {
-	foreach ( map in list_maps ) 
+	foreach( mapname in AllMapsArray() )
 	{
-		if ( map[0] == str || map[1] == str ) 
-		{
-			return map[1];
-		}
+		if( mapname.find( query ) != -1 )
+			return mapname
 	}
 	
-	return GetMapName()
+	return ""
 }
 
-string function GetMode( string str ) //todo:deprecate
+string function FindPlaylistName( string str )
 {
-	foreach ( mode in list_gamemodes ) 
+	array<string> registeredPlaylists = AllPlaylistsArray() //includes custom
+	
+	foreach( string playlist in registeredPlaylists )
 	{
-		if ( mode[0] == str || mode[1] == str ) 
-		{
-			return mode[1];
-		}
+		if( playlist.find( str ) != -1 )
+			return playlist
 	}
 	
-	return GameRules_GetGameMode()
+	return ""
 }
 
-bool function IsControlCharacter(string c) 
+string function FindModeName( string str )
 {
-	var byte = c[0];
-	return (byte >= 0 && byte <= 31) || byte == 127;	
-}
-
-string function sanitize(string str) 
-{
-	string sanitized = "";
-
-	for (int i = 0; i < str.len(); i++) 
+	array<string> registeredModes = AllGamemodesArray()
+	
+	foreach( string gamemode in registeredModes )
 	{
-		string c = str.slice(i, i + 1);
+		if( gamemode.find( str ) != -1 )
+			return gamemode
+	}
+	
+	return ""
+}
+
+bool function IsControlCharacter( string c ) 
+{
+	var byte = c[ 0 ]
+	return ( byte >= 0 && byte <= 31) || byte == 127	
+}
+
+string function StringRemoveControlCharacters( string str )
+{
+	string sanitized = ""
+
+	for ( int i = 0; i < str.len(); i++ ) 
+	{
+		string c = str.slice( i, i + 1 )
 
 		if ( IsControlCharacter(c) ) 
-		{
 			continue	
-		} 
 		else 
-		{
-			sanitized += c;
-		}
+			sanitized += c
 	}
 
-	return sanitized;	
-}
-
-void function print_string_array( array<string> args )
-{
-	string test = "\n\n------ PRINT ARRAY ------\n\n"
-	
-	foreach( arg in args )
-	{
-		test += format( "	\"%s\", \n", arg )
-	}
-	
-	sqprint(test)
+	return sanitized
 }
 
 //Returns false on limited. 
-bool function CheckRate( entity player, bool notify = NOTIFY_RATELIMIT_FAILED, float rate = COMMAND_RATE_LIMIT )
+bool function CheckRate( entity player, string key = DEFAULT_RATE_KEY, float rate = COMMAND_RATE_LIMIT, bool notify = NOTIFY_RATELIMIT_FAILED )
 {	
 	if ( !IsValid( player ) ) 
 		return false 
 			
-	if ( Time() - player.p.ratelimit <= rate )
+	if( !( key in player.p.rateLimitTable ) )
+		player.p.rateLimitTable[ key ] <- 0
+			
+	if ( Time() - player.p.rateLimitTable[ key ] <= rate )
 	{
 		if( notify )
 			LocalEventMsg( player, "#FS_CMD", "", 2 )
@@ -2297,53 +2770,23 @@ bool function CheckRate( entity player, bool notify = NOTIFY_RATELIMIT_FAILED, f
 		return false
 	}
 	
-	player.p.ratelimit = Time()	
+	player.p.rateLimitTable[ key ] = Time()	
 	return true
 }
 
-void function ResetRate( entity player )
+void function ResetRate( entity player, string key = DEFAULT_RATE_KEY )
 {
-	player.p.ratelimit = 0
+	if( !( key in player.p.rateLimitTable ) )
+		player.p.rateLimitTable[ key ] <- 0.0
+	else		
+		player.p.rateLimitTable[ key ] = 0.0
 }
 
-//taken from sh_playlists.gnut
 #if SERVER	
-array<string> function GetPlaylistMaps( PlaylistName playlistName )
-{
-	array<string> mapsArray
-
-	int numModes = GetPlaylistGamemodesCount( playlistName )
-	for ( int modeIndex = 0; modeIndex < numModes; modeIndex++ )
-	{
-		int numMaps = GetPlaylistGamemodeByIndexMapsCount( playlistName, modeIndex )
-		for ( int mapIndex = 0; mapIndex < numMaps; mapIndex++ )
-		{
-			string mapName = GetPlaylistGamemodeByIndexMapByIndex( playlistName, modeIndex, mapIndex )
-			if ( mapsArray.contains( mapName ) )
-				continue
-
-			mapsArray.append( mapName )
-		}
-	}
-
-	return mapsArray
+bool function IsServerAdmin( string uid )
+{	
+	return file.adminsArray.contains( uid )
 }
-
-bool function VerifyAdmin( string PlayerName, string PlayerUID )
-{
-	if ( PlayerName in player_admins ) 
-	{
-		if ( player_admins[ PlayerName ] != PlayerUID ) 
-			return false	
-	}
-	else 
-	{
-		return false
-	}
-	
-	return true
-}
-
 #endif //SERVER
 
 int function WeaponToIdentifier( string weaponName )
@@ -2353,30 +2796,27 @@ int function WeaponToIdentifier( string weaponName )
 		string err = format( "#^ Unknown weaponName !DEBUG IT! -- weapon: %s", weaponName )
 		
 		#if TRACKER && HAS_TRACKER_DLL
-			if( bLog() && isLogging__internal() )
-			{
-				LogEvent__internal( err, bEnc() )
-			}
+			if( bLog() && TrackerIsLogging__internal() )
+				TrackerLogEvent__internal( err, bEnc() )
 		#endif
 		
-		sqerror(err)
-		
+		sqerror(err)	
 		return 2
 	}
 	
-	return WeaponIdentifiers[ weaponName ]
+	return file.tbl_weaponIdentifiers[ weaponName ]
 }
 
 bool function IsWeaponValid( string weaponref )
 {
-	return ( weaponref in WeaponIdentifiers )
+	return ( weaponref in file.tbl_weaponIdentifiers )
 }
 
 void function DEV_PrintTrackerWeapons()
 {
 	string prnt = "\n\n ---------- TRACKER WEAPON IDENTIFIERS --------- \n\n";
 	
-	foreach( weapon, id in WeaponIdentifiers )
+	foreach( weapon, id in file.tbl_weaponIdentifiers )
 	{
 		prnt += format( "[\"%s\"] = %d, \n", weapon, id )
 	}
@@ -2386,46 +2826,52 @@ void function DEV_PrintTrackerWeapons()
 
 table<string, int> function TrackerWepTable() 
 {
-    return WeaponIdentifiers
+    return file.tbl_weaponIdentifiers
 }
 
-bool function exclude( int weaponSource )
+bool function ShouldExcludeDamageSourceShipping( int weaponSource )
 {
 	return !DamageSourceIDHasString( weaponSource )
 }
 
 string function ParseWeapon( string weaponString )
 {
-	array<string> mods = split( trim( weaponString ), " " )
+	array<string> mods = split( strip( weaponString ), " " )
 	
-	if( mods.len() < 1 )
+	if( !mods.len() )
 		return ""
 	
-	if( !IsWeaponValid( mods[0] ) || !(SURVIVAL_Loot_IsRefValid( mods[0] )) )
+	if( !IsWeaponValid( mods[ 0 ] ) || !( SURVIVAL_Loot_IsRefValid( mods[ 0 ] ) ) )
 		return ""
 	
 	bool removed = false
-	
 	for ( int i = mods.len() - 1 ; i >= 1; i-- )
 	{
-		if ( !SURVIVAL_Loot_IsRefValid( mods[i] ) 
-		|| !IsModValidForWeapon( mods[0], mods[i] ) )
+		if ( !SURVIVAL_Loot_IsRefValid( mods[ i ] ) )
 		{
 			removed = true
-			sqprint("removed: " + mods[i] )		
-			mods.remove(i)
+			sqprint( "removed invalid ref:", mods[ i ] )		
+			mods.remove( i )
+		}
+		else if( !IsModValidForWeapon( mods[ 0 ], mods[ i ] ) )
+		{
+			removed = true
+			sqprint( format( "removed invalid mod \"%s\" for weapon \"%s\" )", mods[ i ], mods[ 0 ] ) )	
+			mods.remove( i )
+		}
+		else if( SURVIVAL_Loot_IsRefDisabled( mods[ i ] ) )
+		{
+			removed = true
+			sqprint( format( "removed disabled ref \"%s\"", mods[ i ] ) )		
+			mods.remove( i )
 		}
 	}
 	
+	
 	if ( removed )
-		sqprint( PrintSupportedAttachpointsForWeapon( mods[0] ) )
+		PrintSupportedAttachpointsForWeapon( mods[ 0 ] )
 	
-	string return_string = ""
-	
-	foreach( mod in mods )
-		return_string += mod + " "
-	
-	return trim( return_string )
+	return mods.join( " " )
 }
 
 bool function IsModValidForWeapon( string weaponref, string mod )
@@ -2433,30 +2879,29 @@ bool function IsModValidForWeapon( string weaponref, string mod )
 	array<string> attachPoint = GetAttachPointsForAttachment( mod )
 	LootData wData = SURVIVAL_Loot_GetLootDataByRef( weaponref )	
 	
-	return ( wData.supportedAttachments.contains( attachPoint[0] ) 
-	&& !wData.disabledAttachments.contains( attachPoint[0] ) )
+	return ( wData.supportedAttachments.contains( attachPoint[ 0 ] ) 
+	&& !wData.disabledAttachments.contains( attachPoint[ 0 ] ) )
 }
 
-string function PrintSupportedAttachpointsForWeapon( string weaponref )
+void function PrintSupportedAttachpointsForWeapon( string weaponref )
 {
-	LootData wData = SURVIVAL_Loot_GetLootDataByRef( weaponref )
+	LootData wData = SURVIVAL_Loot_GetLootDataByRef( weaponref )	
+	string debug = format( "\n --- Attachment List for %s --- \n", weaponref )
 	
-	string debug = format("\n --- Attachment List for %s --- \n", weaponref)
-	int i = 1
-	
+	int i = 1	
 	foreach( supported in wData.supportedAttachments )
 	{
 		debug += format( "%d. %s \n", i, supported )
-		i++;
+		i++
 	}
 	
-	return debug
+	sqprint( debug )
 }
 
 #if TRACKER && HAS_TRACKER_DLL
 	void function PrintMatchIDtoAll()
 	{
-		string matchID = format( "\n\n Server stats enabled @ www.r5r.dev, \n round: %d - MatchID: %s \n ", GetCurrentRound(), SQMatchID__internal() )
+		string matchID = format( "\n\n Server stats enabled @ www.r5r.dev, \n round: %d - MatchID: %s \n ", GetCurrentRound(), TrackerMatchID__internal() )
 		thread
 		(
 			void function() : ( matchID )
@@ -2516,16 +2961,21 @@ string function Tracker_DetermineNextMap()
 
 void function Tracker_GotoNextMap()
 {
+	if( IsMapPlaylistGamemodeRotationEnabled() )
+	{
+		DecideNextMapPlaylistGamemodeRotation()
+		return
+	}
+
 	string to_map = Tracker_DetermineNextMap()
 	sqprint( "Changing map to: " + to_map + " - Mode: " + GameRules_GetGameMode() )
-	GameRules_ChangeMap( to_map , GameRules_GetGameMode() )	
+	GameRules_ChangeMap( to_map, GameRules_GetGameMode() )	
 }
 
 string function PrepareForJson( string data ) 
 {
 	if( !empty( data ) )
 	{
-		data = StringReplace( data, ",", "-" ) //temp until playersettings delimiter change or table typed is done.
 		data = StringReplace( data, "\"", "\\\"" )
 		data = StringReplace( data, "'", "\\'" )
 		data = StringReplace( data, "\n", "\\n" ) 
@@ -2534,4 +2984,755 @@ string function PrepareForJson( string data )
 	}
 	
     return data
+}
+
+array<int> function ArrayUniqueInt( array<int> arr )
+{
+	array<int> newArr
+	
+	foreach( item in arr )
+	{
+		if( !newArr.contains( item ) )
+			newArr.append( item )
+		#if DEVELOPER && ( false )
+		else
+			printw( "ArrayUniqueInt: item", item, "was a duplicate and omitted" )
+		#endif			
+	}
+	
+	return newArr
+}
+
+array<string> function ArrayUniqueString( array<string> arr )
+{
+	array<string> newArr
+	
+	foreach( item in arr )
+	{
+		if( !newArr.contains( item ) )
+			newArr.append( item )	
+	}
+	
+	return newArr
+}
+
+void function sqprint( ... )
+{
+	if ( vargc <= 0 )
+		return
+
+	string msg
+	for ( int i = 0; i < vargc; i++ )
+		msg += format( " %s", string( vargv[ i ] ) )
+
+	#if HAS_TRACKER_DLL
+		sqprint__internal( msg )
+	#else 
+		printl( msg )
+	#endif
+}
+
+void function sqerror( ... )
+{
+	if ( vargc <= 0 )
+		return
+
+	string msg
+	for ( int i = 0; i < vargc; i++ )
+		msg += format( " %s", string( vargv[ i ] ) )
+
+	#if HAS_TRACKER_DLL
+		sqerror__internal( msg )
+	#else 
+		printl( msg )
+	#endif
+}
+
+void function sqwarning( ... ) //changed to work as format 
+{
+	if ( vargc <= 0 )
+		return
+
+	string errorMsg = expect string ( vargv[0] )
+	
+	array vars = [ this, errorMsg ] 
+	for( int i = 1; i < vargc; i++ )
+		vars.append( vargv[ i ] )
+	
+	errorMsg = expect string ( format.acall( vars ) )	
+
+	#if HAS_TRACKER_DLL
+		sqwarning__internal( errorMsg )
+	#else
+		Warning( errorMsg )
+	#endif
+}
+
+int function GetWeaponSettingIntFromFile( string weaponRef, string setting )
+{
+	var data = GetWeaponInfoFileKeyField_Global( weaponRef, setting ) 
+
+	if( data != null )
+		return expect int( data )
+	
+	#if DEVELOPER
+		printw( "Invalid weapons settings for", weaponRef, setting )
+	#endif 
+	
+	return 0
+}
+
+string function ConvertVarStatValuetoString( var stat )
+{
+	string statType = typeof stat
+	switch( statType )
+	{
+		case "string":
+			return expect string( stat )
+		case "int":
+			return expect int( stat ).tostring()
+		case "bool":
+			return expect bool( stat ).tostring()
+		case "float":
+			return expect float( stat ).tostring()
+		case "null":
+			return "INVALID_STAT"
+		
+		default:
+			mAssert( 0, "Stat type %s cannot be implicitely converted to string", statType )
+	}
+	
+	return "~error~"
+}
+
+const int STAT_PREFIX_POS = 6
+const int SETTING_PREFIX_POS = 9
+string function GetFormatterValueForPlayer( entity player, string formatter )
+{	
+	if( !IsValid( player ) )
+		return "INVALID_PLAYER"
+
+	switch( formatter )
+	{
+		case "#player":
+			return player.GetPlayerName()
+			
+		case "#uid":
+			return player.GetPlatformUID()
+			
+		case "#ping":
+			return ( player.GetLatency() * 1000 ).tostring()
+			
+		default: 
+			if( formatter.find( "#stat_" ) == 0 )
+			{
+				string statKey = formatter.slice( STAT_PREFIX_POS, formatter.len() )
+				if( statKey == "" )
+					mAssert( 0, "Stat key formatter '%s' was incomplete", formatter )
+					
+				return ConvertVarStatValuetoString( Stats__RawGetStat( player.p.UID, statKey ) )
+			}
+			
+			if( formatter.find( "#setting_" ) == 0 )
+			{
+				string settingKey = formatter.slice( SETTING_PREFIX_POS, formatter.len() )
+				if( settingKey == "" )
+					mAssert( 0, "Setting key formatter '%s' was incomplete", formatter )
+					
+				return Tracker_FetchPlayerData( player.p.UID, settingKey )
+			}
+	}
+	
+	return formatter
+}
+
+string function ResolveFormattersForPlayerMessage( entity player, string message )
+{
+	return RegexpReplaceFuncPlayer
+	( 
+		message, 
+		"#[A-Za-z0-9_]+", 
+		
+		string function( array<string> captures, entity player = null )
+		{
+			return GetFormatterValueForPlayer( player, captures[ 0 ] )
+		},
+		player
+	)
+}
+
+const SYSTEM_RESPONSE = "System"
+bool function SendResponse( entity player, string msg, bool bAdmin = false )
+{
+	if( !IsValid( player ) )
+		return false
+		
+	player.SendServerTextMessage( SYSTEM_RESPONSE, msg, bAdmin )
+	
+	return true
+}
+
+void function BroadcastResponse( string msg, bool bAdmin = false )
+{
+	BroadcastServerTextMessage( SYSTEM_RESPONSE, msg, bAdmin )
+}
+
+bool function SendPM( entity fromPlayer, entity toPlayer, string msg )
+{
+	if( !IsValid( fromPlayer ) || ( !IsValid( toPlayer ) ) )
+		return false
+		
+	if( fromPlayer == toPlayer )
+		return false
+		
+	string fromName = format( "PM From: %s", fromPlayer.GetPlayerName() )
+	toPlayer.SendServerTextMessage( fromName, ResolveFormattersForPlayerMessage( toPlayer, msg ), false )
+	
+	string toMessage = format( "Message sent to %s", toPlayer.GetPlayerName() )	
+	SendResponse( fromPlayer, toMessage )
+	
+	return true
+}
+
+bool function AdminMessage( entity fromAdmin, entity toPlayer, string msg )
+{
+	if( !IsValid( toPlayer ) )
+		return false
+		
+	string formattedName = format( "ADMIN: %s", fromAdmin.GetPlayerName() )
+	toPlayer.SendServerTextMessage( formattedName, ResolveFormattersForPlayerMessage( toPlayer, msg ), true )
+	
+	return true
+}
+
+void function CodeCallback_SendMessage( string criteria, string fromWebPanelUser, string message, bool bToAll )
+{
+	string formattedName = format( "ADMIN: %s", fromWebPanelUser )
+	
+	if( bToAll )
+	{
+		BroadcastServerTextMessage( formattedName, message, true )
+		return
+	}
+	
+	entity candidate = GetPlayer( criteria )
+	if( !IsValid( candidate ) )
+		return 
+		
+	candidate.SendServerTextMessage( formattedName, message, true )
+}
+
+array<string> function ReturnParsableTimestringArgsAtIndex( array<string> args, int index )
+{	
+	array<string> returnArgs
+	if( index <= 0 || args.len() <= index )
+		return returnArgs
+	
+	int argLen = args.len()
+	for( int i = index; i < argLen; i++ )
+		returnArgs.append( args[ i ] )
+		
+	return returnArgs
+}
+
+string function UnescapeWithRules( string s, ParseRules rules )
+{
+	string out = ""
+	int i = 0
+
+	while ( i < s.len() )
+	{
+		if ( i + 1 < s.len() && s.slice( i, i + 1 ) == rules.escapeChar )
+		{
+			string next = s.slice( i + 1, i + 2 )
+
+			if ( next in rules.escapeMap )
+			{
+				out += rules.escapeMap[ next ]
+				i += 2
+				continue
+			}
+		}
+
+		out += s.slice( i, i + 1 )
+		i++
+	}
+
+	return out
+}
+
+array<string> function SplitUnescapedWithRules( string s, string delimiter, ParseRules rules )
+{
+	mAssert( delimiter.len() == 1 )
+
+	array<string> parts
+	string current = ""
+
+	int i = 0
+	while ( i < s.len() )
+	{
+		if ( i + 1 < s.len() && s.slice( i, i + 1 ) == rules.escapeChar )
+		{
+			current += s.slice( i, i + 2 )
+			i += 2
+			continue
+		}
+
+		if ( s.slice( i, i + 1 ) == delimiter )
+		{
+			parts.append( current )
+			current = ""
+			i++
+			continue
+		}
+
+		current += s.slice( i, i + 1 )
+		i++
+	}
+
+	parts.append( current )
+	return parts
+}
+
+int function FindFirstUnescaped( string s, string delimiter, ParseRules rules )
+{
+	mAssert( delimiter.len() == 1 )
+
+	int i = 0
+	while ( i < s.len() )
+	{
+		if ( i + 1 < s.len() && s.slice( i, i + 1 ) == rules.escapeChar )
+		{
+			i += 2
+			continue
+		}
+
+		if ( s.slice( i, i + 1 ) == delimiter )
+			return i
+
+		i++
+	}
+
+	return -1
+}
+
+void function AdminNeedsConfirmAction( entity player, string actionKey, string action )
+{
+	string uid = __EnsureAdminConfirmTable( player, actionKey )
+	file.tbl_adminConfirmations[ uid ][ actionKey ] = action
+}
+
+bool function __AdminHasConfirmedAction( entity player, string actionKey )
+{
+	string uid = __EnsureAdminConfirmTable( player, actionKey )
+	return file.tbl_adminConfirmations[ uid ][ actionKey ] != ""
+}
+
+array< string > function GetStoredAdminCommand( entity player )
+{
+	array< string > args
+	string uid = player.GetPlatformUID()
+	if( !( uid in file.tbl_adminConfirmations ) )
+		return args
+	
+	string actionKey = file.tbl_adminConfirmations[ uid ][ "last_action_key" ]	
+	if( actionKey == "" )
+		return args
+		
+	if( !__AdminHasConfirmedAction( player, actionKey ) )
+		return args
+		
+	string command = file.tbl_adminConfirmations[ uid ][ actionKey ]
+	return split( command, " " )
+}
+
+string function __EnsureAdminConfirmTable( entity player, string actionKey )
+{
+	string uid = player.GetPlatformUID()
+	
+	if( !( uid in file.tbl_adminConfirmations ) )
+	{
+		table< string, string > confirmations
+		file.tbl_adminConfirmations[ uid ] <- confirmations
+	}
+	
+	if( !( "last_action_key" in file.tbl_adminConfirmations[ uid ] ) )
+		file.tbl_adminConfirmations[ uid ][ "last_action_key" ] <- actionKey
+	else 
+		file.tbl_adminConfirmations[ uid ][ "last_action_key" ] = actionKey
+	
+	if( !( actionKey in file.tbl_adminConfirmations[ uid ] ) )
+		file.tbl_adminConfirmations[ uid ][ actionKey ] <- ""
+		
+	return uid
+}
+
+array<string> function GetGamemodesForPlaylist( PlaylistName playlist )
+{
+	array< string > modesArray
+
+	int numModes = GetPlaylistGamemodesCount( playlist )
+	for ( int modeIndex = 0; modeIndex < numModes; modeIndex++ )
+		modesArray.append( GetPlaylistGamemodeByIndex( playlist, modeIndex ) )
+
+	return modesArray
+}
+
+bool function DoesPlaylistSupportGamemode( PlaylistName playlist, string gamemode )
+{
+	return GetGamemodesForPlaylist( playlist ).contains( gamemode )	
+}
+
+const string ERROR_STR = "{error}"
+void function AutoMapPlaylistGamemodeRotationInit( string autoRotateList )
+{
+	array< string > rotationList = split( autoRotateList, "," )
+	if( !rotationList.len() )
+		return
+		
+	int entryIdx = 0
+	foreach( string entry in rotationList )
+	{
+		++entryIdx
+		
+		entry = strip( entry )
+		array< string > args = split( entry, " " ) // [ "map", "playlist", "gamemode", "5" ]
+		
+		PlaylistGamemodeRotateData thisRotationData
+		int rotationParamsLen = args.len()
+		
+		if( rotationParamsLen == 0 )
+		{
+			string errorMsg = format
+			(
+				"Rotation data #[%d] was empty",
+				entryIdx
+			)
+		
+			__AppendRotationErrorDataMessage( thisRotationData, errorMsg )
+			continue
+		}
+		
+		for( int i = 0; i < rotationParamsLen; i++ )
+		{	
+			string rotateParam = strip( args[ i ] )
+			switch( i )
+			{
+				case 0:	
+				{
+					string map = FindMap( rotateParam )
+					if( map == "" )
+					{
+						__CouldNotMatchMessage( thisRotationData, entryIdx, "map", rotateParam, i, entry )
+						thisRotationData.map = ERROR_STR
+						break 
+					}
+					
+					thisRotationData.map = map
+					break
+				}
+				case 1:
+				{
+					string playlist = FindPlaylistName( rotateParam )
+					if( playlist == "" )
+					{
+						__CouldNotMatchMessage( thisRotationData, entryIdx, "playlist", rotateParam, i, entry )
+						thisRotationData.playlist = ERROR_STR
+						break
+					}
+				
+					thisRotationData.playlist = playlist
+					break
+				}	
+				case 2: 
+				{
+					string gamemode = FindModeName( rotateParam )
+					if( gamemode == "" )
+					{
+						__CouldNotMatchMessage( thisRotationData, entryIdx, "gamemode", rotateParam, i, entry )
+						thisRotationData.gamemode = ERROR_STR
+						break
+					}
+					
+					thisRotationData.gamemode = gamemode
+					break
+				}
+				case 3: 
+				{
+					if( !IsStringNumber( rotateParam ) )
+					{
+						string errorMsg = format
+						(
+							"Rotation data #[%d] expected an integer(number) for minplayers param 4 -- Got: '%s'. For Entry: '%s'",
+							entryIdx,
+							rotateParam,
+							entry
+						)
+					
+						__AppendRotationErrorDataMessage( thisRotationData, errorMsg )
+						break
+					}
+					
+					thisRotationData.minplayers = rotateParam.tointeger()
+					break
+				}
+				case 4: 
+				{
+					if( !IsStringNumber( rotateParam ) )
+					{
+						string errorMsg = format
+						(
+							"Rotation data #[%d] expected an integer(number) for maxplayers param 5 -- Got: '%s'. For Entry: '%s'",
+							entryIdx,
+							rotateParam,
+							entry
+						)
+					
+						__AppendRotationErrorDataMessage( thisRotationData, errorMsg )
+						break
+					}
+					
+					thisRotationData.maxplayers = rotateParam.tointeger()
+					break
+				}
+				default:
+				{
+					string errorMsg = format
+					(
+						"Rotation data #[%d] contained an extra argument: '%s'. For Entry: '%s'",
+						entryIdx,
+						rotateParam,
+						entry
+					)
+					
+					__AppendRotationErrorDataMessage( thisRotationData, errorMsg )	
+					break
+				}
+			} //switch		
+		} // rotation params for loop
+		
+		if( thisRotationData.playlist == "" )
+			thisRotationData.playlist = GetCurrentPlaylistName()
+			
+		if( thisRotationData.map == "" )
+			thisRotationData.map = GetMapName()
+			
+		if( thisRotationData.gamemode == "" )
+			thisRotationData.gamemode = GameRules_GetGameMode()
+			
+		int maxPlaylistPlayers = GetPlaylistVarInt( thisRotationData.playlist, "max_players", 129 )
+		if( thisRotationData.maxplayers <= 0 )
+			thisRotationData.maxplayers = maxPlaylistPlayers >= 0 ? maxPlaylistPlayers : 129
+			
+		int minPlaylistPlayers = GetPlaylistVarInt( thisRotationData.playlist, "min_players", 0 )
+		if( thisRotationData.minplayers <= 0 )
+			thisRotationData.minplayers = minPlaylistPlayers >= 0 ? minPlaylistPlayers : 0
+			
+		if( thisRotationData.playlist != ERROR_STR && thisRotationData.map != ERROR_STR )
+		{
+			if( !GetPlaylistMaps( thisRotationData.playlist ).contains( thisRotationData.map ) )
+			{
+				string errorMsg = format
+				( 
+					"Error in rotation data #[%d]: Map '%s' is not in playlist '%s'. For Entry: '%s'",
+					entryIdx,
+					thisRotationData.map,
+					thisRotationData.playlist, 
+					entry
+				)
+				
+				__AppendRotationErrorDataMessage( thisRotationData, errorMsg )	
+			}
+		
+			if( !DoesPlaylistSupportGamemode( thisRotationData.playlist, thisRotationData.gamemode ) )
+			{
+				string errorMsg = format
+				( 
+					"Error in rotation data #[%d]: Playlist '%s' does not support gamemode '%s'. For Entry: '%s'",
+					entryIdx,
+					thisRotationData.playlist,
+					thisRotationData.gamemode,
+					entry
+				)
+				
+				__AppendRotationErrorDataMessage( thisRotationData, errorMsg )	
+			}
+		}
+		
+		file.allRotationData.append( thisRotationData )
+	} // combination foreach 
+	
+	__ValidateAllRotationData()
+}
+
+void function __ValidateAllRotationData()
+{
+	if( !file.errorRotationData.len() )
+		return 
+		
+	int iErrorCount	
+	int iRepeatAsterisk	= 120
+		
+	string errorAlert = format( "\n%s*\n*\n*\n*\n*\n*\n==== The following rotation data errors occurred ==== \n\n", RepeatString( "*", iRepeatAsterisk ) )
+	foreach( PlaylistGamemodeRotateData errorRotationData, array< string > errorStrings in file.errorRotationData )
+	{
+		iErrorCount += errorStrings.len()
+		foreach( string message in errorStrings )
+			errorAlert += format( "%s\n", message )
+	}
+	
+	errorAlert += format( "\n*\n*\n*\n*\n*\n*\n%s", RepeatString( "*", iRepeatAsterisk ) )
+	
+	thread
+	(		
+		void function() : ( errorAlert, iErrorCount )
+		{
+			Dev_CommandLineAddParm( "playlistOverride", "" )
+			wait 3
+					
+			sqerror( errorAlert )
+			mAssert( 0, "AutoRotation via playlist setting 'auto_rotate_list' encountered [%d] errors\nSee console or logs for information.", iErrorCount )
+		}
+	)()
+}
+
+void function __AppendRotationErrorDataMessage( PlaylistGamemodeRotateData data, string msg )
+{
+	array< string > emptyMessages
+	if( !( data in file.errorRotationData ) )
+		file.errorRotationData[ data ] <- emptyMessages
+	
+	file.errorRotationData[ data ].append( msg )
+}
+
+void function __CouldNotMatchMessage( PlaylistGamemodeRotateData rotateData, int entryIdx, string matchFor, string criteria, int iParam, string thisEntry  )
+{
+	string errorMsg = format
+	(
+		"Rotation data #[%d] could not match a *%s* with criteria '%s' @param#:[%d] For Entry: '%s'",
+		entryIdx,
+		matchFor,
+		criteria,
+		iParam + 1,
+		thisEntry
+	)
+	
+	__AppendRotationErrorDataMessage( rotateData, errorMsg )
+}
+
+int function FindCurrentRotationIndex()
+{
+	array< PlaylistGamemodeRotateData > rotationData = file.allRotationData
+	
+	string map = GetMapName()
+	string playlist = GetCurrentPlaylistName()
+	string gamemode = GameRules_GetGameMode()
+	
+	int i = 0
+	foreach( PlaylistGamemodeRotateData data in rotationData )
+	{
+		if
+		( 
+			data.map 		== map 			&&
+			data.playlist 	== playlist		&&
+			data.gamemode	== gamemode
+		)
+		{
+			return i
+		}
+		
+		i++
+	}
+	
+	return -1
+}
+
+array< PlaylistGamemodeRotateData > function GetCurrentRotationSet()
+{
+	return file.allRotationData
+}
+
+void function DecideNextMapPlaylistGamemodeRotation()
+{
+	if( !file.bAutoRotationEnabled )
+		return
+
+	array< PlaylistGamemodeRotateData > allRotationData = file.allRotationData 
+	int rotationMaxIndex = allRotationData.len()
+	int currentRotationIndex = FindCurrentRotationIndex()
+	int rotationIndexToLoad = -1
+	
+	mAssert( rotationMaxIndex != 0, "Rotation is enabled, but there is no valid rotation data." )
+	
+	PlaylistGamemodeRotateData rotationDataToLoad
+	int playerCount = GetConnectedPlayerCount()
+	
+	for( int i = 0; i < rotationMaxIndex; i++ )
+	{
+		rotationIndexToLoad = ( currentRotationIndex + 1 + i ) % rotationMaxIndex		
+		rotationDataToLoad = file.allRotationData[ rotationIndexToLoad ]
+		
+		if( playerCount >= rotationDataToLoad.minplayers && ( rotationDataToLoad.maxplayers <= 0 || playerCount <= rotationDataToLoad.maxplayers ) )
+			break
+	}
+	
+	Dev_CommandLineAddParm( "playlistOverride", rotationDataToLoad.playlist )
+	GameRules_ChangeMap( rotationDataToLoad.map, rotationDataToLoad.gamemode )
+}
+
+bool function IsMapPlaylistGamemodeRotationEnabled()
+{
+	return file.bAutoRotationEnabled
+}
+
+#if DEVELOPER
+	void function TestRandom()
+	{
+		thread
+		(
+			void function()
+			{
+				const int RUN_COUNT = 100000
+				array<string> randomStuff
+				for( int i = 0; i < 5; i++ )
+					randomStuff.append( "rand" + i )
+					
+				string randSelection
+				int idxZeroSelections
+				
+				for( int j = 0; j < RUN_COUNT; j++ )
+				{
+					randSelection = randomStuff.getrandom()
+					if( randSelection == "rand0" )
+						idxZeroSelections++
+				}
+				
+				printf
+				(
+					"Ran %d times, selected idxZero %d times.",
+					RUN_COUNT,
+					idxZeroSelections
+				)
+			}
+		)()
+	}
+#endif
+
+bool function IsValidCharacterGUID( int characterGUID, entity player )
+{
+	ItemFlavor ornull characterOrNull = GetItemFlavorOrNullByGUID( characterGUID )
+	if( characterOrNull == null )
+		return false
+	
+	expect ItemFlavor ( characterOrNull )
+	if( ItemFlavor_GetType( characterOrNull ) != eItemType.character )
+		return false
+		
+	if( !ItemFlavor_ShouldBeVisible( characterOrNull, player ) )
+		return false
+		
+	if( !ItemFlavor_IsAvailableInPlaylist( characterOrNull ) )
+		return false
+		
+	return true
 }

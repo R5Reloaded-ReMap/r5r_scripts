@@ -26,7 +26,9 @@ global function PlaneTest_threaded_simulated
 #endif
 
 const float MAX_DELTA = 5200.0
-struct {
+
+struct 
+{
 	float planeHeight = 0.0
 	float airburstHeight = 0.0
 
@@ -39,6 +41,9 @@ struct {
 	bool staticJumpPoint = false
 	array< void functionref(entity) > Callbacks_OnPlayerLaunchedFromPlane
 	array< void functionref(entity) > Callbacks_OnPlayerPutInPlane
+	
+	bool bGiveBasicSurvivalItems
+	
 } file
 
 void function SurvivalShip_Init()
@@ -46,6 +51,8 @@ void function SurvivalShip_Init()
 	RegisterSignal( "DevPlaneTest" )
 	RegisterSignal( "NoLongerJumpMaster" )
 	RegisterSignal( "ClearedPlayerPlaneViewMode" )
+	
+	file.bGiveBasicSurvivalItems = GetCurrentPlaylistVarBool( "give_basic_survival_items", true )
 
 	AddClientCommandCallback( "Sur_MakeEligibleForJumpMaster", ClientCommand_MakeEligibleForJumpMaster )
 	AddClientCommandCallback( "Sur_RelinquishJumpMaster", ClientCommand_RelinquishJumpMaster )
@@ -86,7 +93,9 @@ bool function ClientCommand_MakeEligibleForJumpMaster( entity player, array<stri
 
 void function SetPlayerPlaneViewMode( entity player )
 {
-	printt( "SetPlayerPlaneViewMode", player )
+	#if DEVELOPER
+		printt( "SetPlayerPlaneViewMode", player )
+	#endif
 
 	bool updateCamera = player.GetPlayerNetBool( "playerInPlane" ) == false
 
@@ -140,15 +149,21 @@ void function SetPlayerPlaneViewMode( entity player )
 
 void function TurnOffAimassistForPlaneView( entity player )
 {
-	thread function() : (player)
+	thread function() : ( player )
 	{
+		if( !IsValid( player ) )
+			return 
+			
 		player.SetAimAssistAllowed( false )
 
-		OnThreadEnd( function() : (player)
-		{
-			if ( IsValid( player ) )
-				player.SetAimAssistAllowed( true )
-		} )
+		OnThreadEnd
+		( 
+			function() : ( player )
+			{
+				if ( IsValid( player ) )
+					player.SetAimAssistAllowed( true )
+			} 
+		)
 
 		player.EndSignal( "ClearedPlayerPlaneViewMode" )
 		player.EndSignal( "OnDeath" )
@@ -213,10 +228,10 @@ void function ClearPlayerPlaneViewMode( entity player )
 
 	// if( Playlist() == ePlaylists.fs_haloMod_survival )
 	// {
-		// GiveLoadoutRelatedWeapons_HaloMod( player ) //Cafe was here
+		// GiveLoadoutRelatedWeapons_HaloMod( player )
 	// } else if( !IsDevGamemode() )
 	// {
-		// GiveLoadoutRelatedWeapons( player ) //Cafe was here
+		// GiveLoadoutRelatedWeapons( player )
 	// }
 }
 
@@ -314,7 +329,7 @@ void function JumpFromPlane( entity player, bool forcedOut = false )
 	foreach ( jumpingPlayer in jumpingPlayers )
 	{
 		thread PlayerSkyDive( jumpingPlayer, driverViewVector, jumpingPlayers, player )
-		GiveBasicSurvivalItems( jumpingPlayer ) //Cafe was here	
+		GiveBasicSurvivalItems( jumpingPlayer )
 	}
 }
 
@@ -325,9 +340,9 @@ void function SURVIVAL_SetMapDelta( float maxDelta )
 
 void function GiveBasicSurvivalItems( entity player )
 {
-	if( !IsValid( player ) || Playlist() == ePlaylists.fs_scenarios )
+	if( !IsValid( player ) || !file.bGiveBasicSurvivalItems )
 		return
-	
+
 	//add white shield, white knockdown shield, white helmet, two syringes and two cells
 	Inventory_SetPlayerEquipment( player, "armor_pickup_lv1", "armor")
 	Inventory_SetPlayerEquipment( player, "helmet_pickup_lv1", "helmet")
@@ -342,22 +357,18 @@ void function GiveBasicSurvivalItems( entity player )
 	
 	Survival_SetInventoryEnabled( player, true )
 
-	ItemFlavor playerCharacter = LoadoutSlot_GetItemFlavor( ToEHI( player ), Loadout_CharacterClass() )
+	//ItemFlavor playerCharacter = LoadoutSlot_GetItemFlavor( ToEHI( player ), Loadout_CharacterClass() )
 	
-	if( ItemFlavor_GetHumanReadableRef( playerCharacter ) != "character_gibraltar" )
-	{
-		player.TakeOffhandWeapon( OFFHAND_EQUIPMENT )
-		player.GiveOffhandWeapon( "mp_ability_emote_projector", OFFHAND_EQUIPMENT )
-	}
 	// todo: find why it's not playing fx on cockpit
 	// BroadcastItemPickup( player, "armor_pickup_lv1", eLootAction.EQUIP )
 
 	if( Playlist() == ePlaylists.fs_haloMod_survival )
 	{
-		GiveLoadoutRelatedWeapons_HaloMod( player ) //Cafe was here
-	} else
+		GiveLoadoutRelatedWeapons_HaloMod( player )
+	} 
+	else
 	{
-		GiveLoadoutRelatedWeapons( player ) //Cafe was here
+		GiveLoadoutRelatedWeapons( player )
 	}
 	
 	if( player.p.respawnPodLanded )
@@ -366,7 +377,8 @@ void function GiveBasicSurvivalItems( entity player )
 	if( Playlist() == ePlaylists.fs_ltm_mortalevoshields )
 	{
 		Message(player, "MORTAL EVOSHIELDS", "Kill enemies to evolve your shields infinitely.", 8) // todo move this to localization. Cafe
-	} else if( Playlist() == ePlaylists.fs_haloMod_survival && GetCurrentPlaylistVarBool( "is_hiswattson_event", false ) )
+	} 
+	else if( Playlist() == ePlaylists.fs_haloMod_survival && GetCurrentPlaylistVarBool( "is_hiswattson_event", false ) )
 	{
 		Remote_CallFunction_ByRef( player, "HaloBrIntroSequence" )
 	}
@@ -686,7 +698,6 @@ void function JumpMasterDeathRelinquish( entity player )
 
 int function SortJumpmastersToTop(entity a, entity b)
 {
-
 	if ( ( !IsValid(a) || !a.GetPlayerNetBool("isJumpmaster") ) && ( IsValid( b ) && b.GetPlayerNetBool("isJumpmaster") ) )
 		return 1
 
